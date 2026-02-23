@@ -213,9 +213,6 @@ class BotApp:
             if mention.lower() != (self._bot_username or ""):
                 return
 
-        if message.chat.type in {"group", "supergroup"} and cmd_name in {"/start", "/next", "/stop"}:
-            await message.answer("Команда получена, обрабатываю...")
-
         if cmd_name == "/start":
             await self.cmd_start(message)
             return
