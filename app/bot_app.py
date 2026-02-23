@@ -193,7 +193,9 @@ class BotApp:
     async def on_text_message(self, message: Message) -> None:
         if message.text is None or message.text.startswith("/"):
             return
-        if message.from_user is None or message.from_user.is_bot:
+        # Ignore bot-authored messages, but allow anonymous admin messages
+        # where Telegram sets sender_chat and omits from_user.
+        if message.from_user is not None and message.from_user.is_bot:
             return
 
         async def _run() -> None:
@@ -201,7 +203,12 @@ class BotApp:
             if status != "correct" or question is None:
                 return
 
-            name = message.from_user.full_name or "Игрок"
+            if message.from_user is not None:
+                name = message.from_user.full_name or "Игрок"
+            elif message.sender_chat is not None:
+                name = message.sender_chat.title or "Игрок"
+            else:
+                name = "Игрок"
             await message.answer(f"✅ {html.escape(name)}, правильный ответ!")
             await message.answer(self._format_answer(question), parse_mode="HTML")
             prep_status, next_question = await self.game.prepare_next_after_correct(message.chat.id)

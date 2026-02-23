@@ -82,7 +82,8 @@ class GotQuestionsParser:
         return pack
 
     def _question_passes_filter(self, likes: int, dislikes: int | None) -> bool:
-        if likes < self.settings.min_likes:
+        required_likes = max(self.settings.min_likes, 10)
+        if likes < required_likes:
             return False
 
         policy = self.settings.zero_dislikes_policy
@@ -91,7 +92,7 @@ class GotQuestionsParser:
                 return False
             if policy == "include_as_infinite_ratio":
                 return True
-            return likes >= self.settings.min_likes
+            return likes >= required_likes
 
         ratio = likes / dislikes
         return ratio > self.settings.likes_dislikes_ratio_min
