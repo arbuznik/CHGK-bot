@@ -30,6 +30,7 @@ class BotApp:
         self.router.message.register(self.cmd_start, Command("start"))
         self.router.message.register(self.cmd_next, Command("next"))
         self.router.message.register(self.cmd_stop, Command("stop"))
+        self.router.message.register(self.on_command_fallback, F.text.startswith("/"))
         self.router.message.register(self.on_text_message, F.text)
 
     async def _with_chat_lock(self, chat_id: int, fn: Callable[[], Awaitable[None]]) -> None:
@@ -152,6 +153,23 @@ class BotApp:
             )
 
         await self._with_chat_lock(message.chat.id, _run)
+
+    async def on_command_fallback(self, message: Message) -> None:
+        if message.text is None:
+            return
+        text = message.text.strip()
+        cmd = text.split()[0].lower()
+        cmd_name = cmd.split("@", 1)[0]
+
+        if cmd_name == "/start":
+            await self.cmd_start(message)
+            return
+        if cmd_name == "/next":
+            await self.cmd_next(message)
+            return
+        if cmd_name == "/stop":
+            await self.cmd_stop(message)
+            return
 
     async def on_text_message(self, message: Message) -> None:
         if message.text is None or message.text.startswith("/"):
