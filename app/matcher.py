@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import re
+import unicodedata
 from typing import Iterable
 
 _SPLIT_RE = re.compile(r"[\n;,/]|\s+или\s+", re.IGNORECASE)
@@ -11,6 +12,10 @@ _SPACES_RE = re.compile(r"\s+")
 
 
 def normalize_text(value: str) -> str:
+    # Normalize Unicode to make accented variants and composed forms comparable.
+    value = unicodedata.normalize("NFD", value)
+    value = "".join(ch for ch in value if unicodedata.category(ch) != "Mn")
+    value = value.replace("ё", "е").replace("Ё", "Е")
     value = value.lower().strip()
     value = _BRACKET_RE.sub(" ", value)
     value = _NON_ALNUM_RE.sub(" ", value)
