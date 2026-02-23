@@ -82,21 +82,29 @@ class BotApp:
             url = question.razdatka_pic_url
             if url.startswith("/"):
                 url = f"https://gotquestions.online{url}"
-            sent = await self.bot.send_photo(chat_id=chat_id, photo=url, caption=text, parse_mode="HTML")
+            try:
+                sent = await self.bot.send_photo(chat_id=chat_id, photo=url, caption=text, parse_mode="HTML")
+            except Exception:
+                logger.exception("Failed to send photo for question_id=%s; fallback to text", question.question_id)
+                sent = await self.bot.send_message(chat_id=chat_id, text=text, parse_mode="HTML")
         else:
             sent = await self.bot.send_message(chat_id=chat_id, text=text, parse_mode="HTML")
         self.game.set_current_message_id(chat_id, sent.message_id)
 
     async def cmd_start(self, message: Message) -> None:
         async def _run() -> None:
-            status, q = await self.game.start_game(message.chat.id)
-            if status == "already_running":
-                await message.answer("Игра уже запущена. Используй /next или /stop.")
-                return
-            if status == "no_questions" or q is None:
-                await message.answer("Нет подходящих вопросов в пуле. Попробуй чуть позже.")
-                return
-            await self._send_question_to_chat(message.chat.id, q)
+            try:
+                status, q = await self.game.start_game(message.chat.id)
+                if status == "already_running":
+                    await message.answer("Игра уже запущена. Используй /next или /stop.")
+                    return
+                if status == "no_questions" or q is None:
+                    await message.answer("Нет подходящих вопросов в пуле. Попробуй чуть позже.")
+                    return
+                await self._send_question_to_chat(message.chat.id, q)
+            except Exception:
+                logger.exception("cmd_start failed for chat_id=%s", message.chat.id)
+                await message.answer("Ошибка при запуске игры. Попробуй еще раз через несколько секунд.")
 
         await self._with_chat_lock(message.chat.id, _run)
 
