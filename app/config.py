@@ -10,8 +10,7 @@ class Settings:
     bot_mode: str
     database_url: str
     next_delay_sec: int
-    min_ready_questions: int
-    max_ready_questions: int
+    replenish_target_per_level: int
     likes_dislikes_ratio_min: float
     min_likes: int
     zero_dislikes_policy: str
@@ -65,8 +64,7 @@ def get_settings() -> Settings:
         bot_mode=os.getenv("BOT_MODE", "polling").strip().lower(),
         database_url=database_url,
         next_delay_sec=_env_int("NEXT_DELAY_SEC", 2),
-        min_ready_questions=_env_int("MIN_READY_QUESTIONS", 10),
-        max_ready_questions=_env_int("MAX_READY_QUESTIONS", 50),
+        replenish_target_per_level=_env_int("REPLENISH_TARGET_PER_LEVEL", 100),
         likes_dislikes_ratio_min=_env_float("LIKES_DISLIKES_RATIO_MIN", 15.0),
         min_likes=_env_int("MIN_LIKES", 5),
         zero_dislikes_policy=os.getenv("ZERO_DISLIKES_POLICY", "fallback").strip().lower(),

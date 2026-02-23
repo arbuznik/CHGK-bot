@@ -17,8 +17,6 @@ from app.models import Pack, Question
 logger = logging.getLogger(__name__)
 
 _NEXT_CHUNK_RE = re.compile(r'self\.__next_f\.push\(\[1,"(.*?)"\]\)</script>', re.S)
-_MIN_READY_PER_LEVEL = 10
-_MAX_READY_PER_LEVEL = 50
 
 
 @dataclass
@@ -148,7 +146,7 @@ class GotQuestionsParser:
         db: Session,
         pack: dict,
         q: dict,
-        needed_categories: set[int],
+        target_per_level: int,
         ready_by_category: dict[int, int],
     ) -> bool:
         question_id = int(q["id"])
@@ -181,9 +179,7 @@ class GotQuestionsParser:
         bucket = difficulty_bucket(c1, c2)
         if bucket is None:
             return False
-        if bucket not in needed_categories:
-            return False
-        if ready_by_category.get(bucket, 0) >= _MAX_READY_PER_LEVEL:
+        if ready_by_category.get(bucket, 0) >= target_per_level:
             return False
 
         take_num, take_den, take_percent = self._calc_take(q)
@@ -218,7 +214,6 @@ class GotQuestionsParser:
     def count_ready_by_category(self, db: Session) -> dict[int, int]:
         rows = db.execute(
             select(Question.pack_complexity_primary, Question.pack_complexity_secondary)
-            .where(Question.is_used.is_(False))
         ).all()
         out = {level: 0 for level in range(1, 11)}
         for c1, c2 in rows:
@@ -228,11 +223,9 @@ class GotQuestionsParser:
             out[bucket] = out.get(bucket, 0) + 1
         return out
 
-    def replenish_if_needed(self, db: Session) -> ReplenishResult:
+    def replenish_to_target(self, db: Session, target_per_level: int) -> ReplenishResult:
         ready_by_category = self.count_ready_by_category(db)
-        needed_categories = {
-            level for level in range(1, 11) if ready_by_category.get(level, 0) < _MIN_READY_PER_LEVEL
-        }
+        needed_categories = {level for level in range(1, 11) if ready_by_category.get(level, 0) < target_per_level}
         if not needed_categories:
             return ReplenishResult(
                 added_questions=0,
@@ -254,7 +247,7 @@ class GotQuestionsParser:
                 break
 
             for pack_id in pack_ids:
-                if all(ready_by_category.get(level, 0) >= _MAX_READY_PER_LEVEL for level in needed_categories):
+                if all(ready_by_category.get(level, 0) >= target_per_level for level in needed_categories):
                     db.commit()
                     return ReplenishResult(
                         added_questions=added,
@@ -278,7 +271,7 @@ class GotQuestionsParser:
                     questions = tour.get("questions") if isinstance(tour, dict) and isinstance(tour.get("questions"), list) else []
                     for q in questions:
                         try:
-                            if self._upsert_question(db, pack, q, needed_categories, ready_by_category):
+                            if self._upsert_question(db, pack, q, target_per_level, ready_by_category):
                                 added += 1
                         except Exception:
                             logger.exception("Failed to upsert question in pack id=%s", pack_id)

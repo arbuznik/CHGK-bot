@@ -67,3 +67,13 @@ class ChatSession(Base):
     session_complexity_secondary_sum: Mapped[float] = mapped_column(Float, default=0.0)
     session_complexity_count: Mapped[int] = mapped_column(Integer, default=0)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+
+class ChatQuestionUsage(Base):
+    __tablename__ = "chat_question_usage"
+    __table_args__ = (UniqueConstraint("chat_id", "question_id", name="uq_chat_question_usage_chat_question"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    chat_id: Mapped[int] = mapped_column(BigInteger, index=True)
+    question_id: Mapped[int] = mapped_column(ForeignKey("questions.question_id"), index=True)
+    used_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)

@@ -28,6 +28,7 @@ class BotApp:
         self.dp.include_router(self.router)
         self.chat_locks: dict[int, asyncio.Lock] = defaultdict(asyncio.Lock)
         self.scheduled_next: dict[int, asyncio.Task] = {}
+        self.replenish_tasks: dict[int, asyncio.Task] = {}
         self._bot_username: str | None = None
 
         self.router.message.register(self.on_command_fallback, F.text.startswith("/"))
@@ -44,6 +45,10 @@ class BotApp:
         if task and not task.done():
             task.cancel()
         self.scheduled_next.pop(chat_id, None)
+
+    def _is_replenish_running(self, chat_id: int) -> bool:
+        task = self.replenish_tasks.get(chat_id)
+        return bool(task and not task.done())
 
     def _format_question(self, question) -> str:
         lines = [
@@ -103,6 +108,36 @@ class BotApp:
         else:
             sent = await self.bot.send_message(chat_id=chat_id, text=text, parse_mode="HTML")
         self.game.set_current_message_id(chat_id, sent.message_id)
+        self.game.mark_question_published(chat_id, question.question_id)
+
+    async def _trigger_replenish_for_chat(self, chat_id: int) -> None:
+        if self._is_replenish_running(chat_id):
+            return
+
+        async def _task() -> None:
+            try:
+                await self.game.pool.replenish_to_target()
+                async with self.chat_locks[chat_id]:
+                    status, question = self.game.resume_after_replenish(chat_id)
+                    if status == "ok" and question is not None:
+                        await self._send_question_to_chat(chat_id, question)
+                        return
+                    if status == "still_empty":
+                        await self.bot.send_message(
+                            chat_id=chat_id,
+                            text="Не удалось пополнить базу до нужного объема. Попробуй /start чуть позже.",
+                        )
+            except Exception:
+                logger.exception("Replenish task failed for chat_id=%s", chat_id)
+                try:
+                    await self.bot.send_message(
+                        chat_id=chat_id,
+                        text="Ошибка при парсинге новых вопросов. Попробуй /start через несколько минут.",
+                    )
+                except Exception:
+                    logger.exception("Failed to send replenish error message for chat_id=%s", chat_id)
+
+        self.replenish_tasks[chat_id] = asyncio.create_task(_task())
 
     async def cmd_start(self, message: Message) -> None:
         async def _run() -> None:
@@ -112,11 +147,18 @@ class BotApp:
                     await message.answer("Использование: /start [сложность 1-10]. Пример: /start 6")
                     return
                 status, q = await self.game.start_game(message.chat.id, None if selected_difficulty == 0 else selected_difficulty)
+                if status == "waiting_replenish":
+                    await message.answer("Парсинг новых вопросов уже запущен. Подождите немного.")
+                    await self._trigger_replenish_for_chat(message.chat.id)
+                    return
                 if status == "already_running":
                     await message.answer("Игра уже запущена. Используй /next или /stop.")
                     return
-                if status == "no_questions" or q is None:
-                    await message.answer("Нет подходящих вопросов в пуле. Попробуй чуть позже.")
+                if status == "need_replenish" or q is None:
+                    await message.answer(
+                        "Вопросы для этого чата закончились. Запускаю парсинг новых, подождите немного."
+                    )
+                    await self._trigger_replenish_for_chat(message.chat.id)
                     return
                 await self._send_question_to_chat(message.chat.id, q)
             except Exception:
@@ -166,8 +208,11 @@ class BotApp:
             return
         if current is not None:
             await message.answer(self._format_answer(current), parse_mode="HTML")
-        if status == "no_questions" or next_q is None:
-            await message.answer("Подходящие вопросы закончились. Игра остановлена.")
+        if status == "need_replenish" or next_q is None:
+            await message.answer(
+                "Вопросы для этого чата закончились. Запускаю парсинг новых, подождите немного."
+            )
+            await self._trigger_replenish_for_chat(message.chat.id)
             return
         await self._schedule_next_send_for_chat(message.chat.id)
 
@@ -256,8 +301,12 @@ class BotApp:
             await self.bot.send_message(chat_id=target_chat_id, text=f"✅ {html.escape(name)}, правильный ответ!")
             await self.bot.send_message(chat_id=target_chat_id, text=self._format_answer(question), parse_mode="HTML")
             prep_status, next_question = await self.game.prepare_next_after_correct(target_chat_id)
-            if prep_status == "no_questions" or next_question is None:
-                await self.bot.send_message(chat_id=target_chat_id, text="Подходящие вопросы закончились. Игра остановлена.")
+            if prep_status == "need_replenish" or next_question is None:
+                await self.bot.send_message(
+                    chat_id=target_chat_id,
+                    text="Вопросы для этого чата закончились. Запускаю парсинг новых, подождите немного.",
+                )
+                await self._trigger_replenish_for_chat(target_chat_id)
                 return
             await self._schedule_next_send_for_chat(target_chat_id)
 
