@@ -36,6 +36,15 @@ def init_db(session_factory) -> None:
                     "ALTER TABLE chat_sessions "
                     "ADD COLUMN selected_difficulty INTEGER NULL"
                 )
+            q_col_exists = conn.exec_driver_sql(
+                "SELECT 1 FROM information_schema.columns "
+                "WHERE table_name='questions' AND column_name='razdatka_text'"
+            ).scalar_one_or_none()
+            if q_col_exists is None:
+                conn.exec_driver_sql(
+                    "ALTER TABLE questions "
+                    "ADD COLUMN razdatka_text TEXT"
+                )
         elif engine.dialect.name == "sqlite":
             rows = conn.exec_driver_sql("PRAGMA table_info(chat_sessions)").fetchall()
             has_col = any(r[1] == "selected_difficulty" for r in rows)
@@ -43,6 +52,13 @@ def init_db(session_factory) -> None:
                 conn.exec_driver_sql(
                     "ALTER TABLE chat_sessions "
                     "ADD COLUMN selected_difficulty INTEGER"
+                )
+            q_rows = conn.exec_driver_sql("PRAGMA table_info(questions)").fetchall()
+            has_q_col = any(r[1] == "razdatka_text" for r in q_rows)
+            if not has_q_col:
+                conn.exec_driver_sql(
+                    "ALTER TABLE questions "
+                    "ADD COLUMN razdatka_text TEXT"
                 )
 
 

@@ -153,7 +153,20 @@ class GotQuestionsParser:
         existing = db.get(Question, question_id)
         likes = int(q.get("totalLikes") or 0)
 
+        razdatka_pic = str(q.get("razdatkaPic") or "")
+        razdatka_text = str(q.get("razdatkaText") or "")
+
         if existing is not None:
+            # Backfill distributive materials for already parsed questions.
+            changed = False
+            if not existing.razdatka_pic_url and razdatka_pic:
+                existing.razdatka_pic_url = razdatka_pic
+                changed = True
+            if not existing.razdatka_text and razdatka_text:
+                existing.razdatka_text = razdatka_text
+                changed = True
+            if changed:
+                existing.updated_at = datetime.utcnow()
             return False
 
         dislikes = None
@@ -179,7 +192,8 @@ class GotQuestionsParser:
             number_in_pack=int(q.get("number") or 0),
             text=str(q.get("text") or ""),
             source_url=f"https://gotquestions.online/question/{question_id}",
-            razdatka_pic_url=str(q.get("razdatkaPic") or ""),
+            razdatka_pic_url=razdatka_pic,
+            razdatka_text=razdatka_text,
             answer=str(q.get("answer") or ""),
             zachet=str(q.get("zachet") or ""),
             comment=str(q.get("comment") or ""),

@@ -32,6 +32,7 @@ class Question(Base):
     text: Mapped[str] = mapped_column(Text)
     source_url: Mapped[str] = mapped_column(String(1024), default="")
     razdatka_pic_url: Mapped[str] = mapped_column(String(1024), default="")
+    razdatka_text: Mapped[str] = mapped_column(Text, default="")
     answer: Mapped[str] = mapped_column(Text, default="")
     zachet: Mapped[str] = mapped_column(Text, default="")
     comment: Mapped[str] = mapped_column(Text, default="")

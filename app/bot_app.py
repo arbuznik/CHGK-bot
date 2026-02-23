@@ -52,9 +52,21 @@ class BotApp:
         lines = [
             f"<b>Вопрос #{question.number_in_pack}</b>",
             html.escape(question.text or ""),
-            "",
-            f"👍 {question.likes} | 👎 {question.dislikes if question.dislikes is not None else 'н/д'}",
         ]
+        if question.razdatka_text:
+            lines.extend(
+                [
+                    "",
+                    "<b>Раздатка:</b>",
+                    f"<pre>{html.escape(question.razdatka_text)}</pre>",
+                ]
+            )
+        lines.extend(
+            [
+                "",
+                f"👍 {question.likes} | 👎 {question.dislikes if question.dislikes is not None else 'н/д'}",
+            ]
+        )
         if question.pack_complexity_primary is not None or question.pack_complexity_secondary is not None:
             lines.append(
                 "Сложность пака: "
