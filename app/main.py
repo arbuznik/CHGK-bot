@@ -1,0 +1,91 @@
+from __future__ import annotations
+
+import asyncio
+import logging
+
+from aiohttp import web
+from aiogram.webhook.aiohttp_server import SimpleRequestHandler, setup_application
+from dotenv import load_dotenv
+
+from app.bot_app import BotApp
+from app.config import get_settings
+from app.db import build_session_factory
+from app.logging_setup import setup_logging
+from app.models import Base
+from app.services import GameService, PoolService
+
+logger = logging.getLogger(__name__)
+
+
+def init_db(session_factory) -> None:
+    engine = session_factory.kw["bind"]
+    Base.metadata.create_all(engine)
+
+
+async def async_main() -> None:
+    load_dotenv()
+    settings = get_settings()
+    setup_logging(settings.log_level)
+
+    session_factory = build_session_factory(settings.database_url)
+    init_db(session_factory)
+
+    pool = PoolService(settings, session_factory)
+    game = GameService(settings, session_factory, pool)
+    app = BotApp(settings, game)
+
+    if settings.bot_mode == "polling":
+        await app.run_polling()
+        return
+
+    if settings.bot_mode != "webhook":
+        raise RuntimeError("BOT_MODE must be either 'polling' or 'webhook'")
+
+    if not settings.webhook_base_url:
+        raise RuntimeError("WEBHOOK_BASE_URL is required when BOT_MODE=webhook")
+
+    webhook_path = settings.webhook_path if settings.webhook_path.startswith("/") else f"/{settings.webhook_path}"
+    webhook_url = f"{settings.webhook_base_url.rstrip('/')}{webhook_path}"
+
+    aio_app = web.Application()
+
+    async def healthcheck(_: web.Request) -> web.Response:
+        return web.json_response({"status": "ok"})
+
+    aio_app.router.add_get("/healthz", healthcheck)
+    aio_app.router.add_get("/", healthcheck)
+
+    request_handler = SimpleRequestHandler(
+        dispatcher=app.dp,
+        bot=app.bot,
+        secret_token=settings.webhook_secret_token or None,
+    )
+    request_handler.register(aio_app, path=webhook_path)
+    setup_application(aio_app, app.dp, bot=app.bot)
+
+    async def on_startup(_: web.Application) -> None:
+        await app.bot.set_webhook(
+            url=webhook_url,
+            secret_token=settings.webhook_secret_token or None,
+            drop_pending_updates=True,
+        )
+        logger.info("Webhook set: %s", webhook_url)
+
+    async def on_shutdown(_: web.Application) -> None:
+        await app.bot.delete_webhook()
+
+    aio_app.on_startup.append(on_startup)
+    aio_app.on_shutdown.append(on_shutdown)
+
+    runner = web.AppRunner(aio_app)
+    await runner.setup()
+    site = web.TCPSite(runner, host=settings.web_server_host, port=settings.web_server_port)
+    await site.start()
+    logger.info("Webhook server started on %s:%s", settings.web_server_host, settings.web_server_port)
+
+    stop_event = asyncio.Event()
+    await stop_event.wait()
+
+
+if __name__ == "__main__":
+    asyncio.run(async_main())

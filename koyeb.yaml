@@ -1,0 +1,29 @@
+name: chgk-bot
+services:
+  - name: bot
+    type: web
+    env: docker
+    docker:
+      dockerfile: Dockerfile
+    ports:
+      - port: 8080
+        protocol: http
+    routes:
+      - path: /
+    health_checks:
+      - protocol: http
+        path: /healthz
+        port: 8080
+        interval: 30s
+        timeout: 5s
+        healthy_threshold: 1
+        unhealthy_threshold: 3
+    env_vars:
+      - key: BOT_MODE
+        value: webhook
+      - key: WEB_SERVER_HOST
+        value: 0.0.0.0
+      - key: WEB_SERVER_PORT
+        value: "8080"
+      - key: WEBHOOK_PATH
+        value: /telegram/webhook
