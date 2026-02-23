@@ -93,8 +93,29 @@ class GameService:
         return db.execute(query.order_by(func.random()).limit(1)).scalar_one_or_none()
 
     async def start_game(self, chat_id: int, selected_difficulty: int | None) -> tuple[str, Question | None]:
-        await self.pool.ensure_pool_if_needed()
+        with self.session_factory() as db:
+            session = self.get_or_create_session(db, chat_id)
+            if session.state != "IDLE":
+                return "already_running", None
 
+            question = self._next_question(db, selected_difficulty)
+            if question is not None:
+                question.is_used = True
+                question.updated_at = datetime.utcnow()
+                session.state = "QUESTION_ACTIVE"
+                session.selected_difficulty = selected_difficulty
+                session.current_question_id = question.question_id
+                session.current_question_message_id = None
+                session.session_asked_count = 1
+                session.session_taken_count = 0
+                session.session_complexity_primary_sum = float(question.pack_complexity_primary or 0.0)
+                session.session_complexity_secondary_sum = float(question.pack_complexity_secondary or 0.0)
+                session.session_complexity_count = 1 if (question.pack_complexity_primary is not None or question.pack_complexity_secondary is not None) else 0
+                session.updated_at = datetime.utcnow()
+                db.commit()
+                return "ok", question
+
+        await self.pool.ensure_pool_if_needed()
         with self.session_factory() as db:
             session = self.get_or_create_session(db, chat_id)
             if session.state != "IDLE":
@@ -150,8 +171,6 @@ class GameService:
     async def _prepare_next_for_chat(
         self, chat_id: int, return_current: bool = True
     ) -> tuple[str, Question | None, Question | None] | tuple[str, Question | None]:
-        await self.pool.ensure_pool_if_needed()
-
         with self.session_factory() as db:
             session = self.get_or_create_session(db, chat_id)
             current = db.get(Question, session.current_question_id) if session.current_question_id else None
@@ -159,6 +178,33 @@ class GameService:
                 if return_current:
                     return "no_active", current, None
                 return "no_active", None
+            next_q = self._next_question(db, session.selected_difficulty)
+            if next_q is not None:
+                next_q.is_used = True
+                next_q.updated_at = datetime.utcnow()
+                session.current_question_id = next_q.question_id
+                session.current_question_message_id = None
+                session.state = "QUESTION_ACTIVE"
+                session.session_asked_count += 1
+                if next_q.pack_complexity_primary is not None or next_q.pack_complexity_secondary is not None:
+                    session.session_complexity_count += 1
+                    session.session_complexity_primary_sum += float(next_q.pack_complexity_primary or 0.0)
+                    session.session_complexity_secondary_sum += float(next_q.pack_complexity_secondary or 0.0)
+                session.updated_at = datetime.utcnow()
+                db.commit()
+                if return_current:
+                    return "ok", current, next_q
+                return "ok", next_q
+
+        await self.pool.ensure_pool_if_needed()
+        with self.session_factory() as db:
+            session = self.get_or_create_session(db, chat_id)
+            current = db.get(Question, session.current_question_id) if session.current_question_id else None
+            if session.state != "ANSWER_PENDING_NEXT":
+                if return_current:
+                    return "no_active", current, None
+                return "no_active", None
+
             next_q = self._next_question(db, session.selected_difficulty)
             if next_q is None:
                 session.state = "IDLE"
