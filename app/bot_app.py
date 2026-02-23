@@ -269,7 +269,7 @@ class BotApp:
 
     async def setup_commands_menu(self) -> None:
         commands = [
-            BotCommand(command="start", description="Старт игры: /start или /start 1-10"),
+            BotCommand(command="start", description="Старт игры: /start [сложность 1-10]"),
             BotCommand(command="next", description="Показать ответ и следующий вопрос"),
             BotCommand(command="stop", description="Остановить игру и показать статистику"),
         ]
