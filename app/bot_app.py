@@ -9,6 +9,9 @@ from typing import Awaitable, Callable
 from aiogram import Bot, Dispatcher, F, Router
 from aiogram.filters import Command
 from aiogram.types import Message
+from aiogram.types.bot_command import BotCommand
+from aiogram.types.bot_command_scope_all_group_chats import BotCommandScopeAllGroupChats
+from aiogram.types.bot_command_scope_all_private_chats import BotCommandScopeAllPrivateChats
 
 from app.config import Settings
 from app.services import GameService
@@ -228,4 +231,14 @@ class BotApp:
         await self._with_chat_lock(message.chat.id, _run)
 
     async def run_polling(self) -> None:
+        await self.setup_commands_menu()
         await self.dp.start_polling(self.bot)
+
+    async def setup_commands_menu(self) -> None:
+        commands = [
+            BotCommand(command="start", description="Начать игру и дать вопрос"),
+            BotCommand(command="next", description="Показать ответ и следующий вопрос"),
+            BotCommand(command="stop", description="Остановить игру и показать статистику"),
+        ]
+        await self.bot.set_my_commands(commands, scope=BotCommandScopeAllPrivateChats())
+        await self.bot.set_my_commands(commands, scope=BotCommandScopeAllGroupChats())

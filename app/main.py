@@ -71,6 +71,7 @@ async def async_main() -> None:
     setup_application(aio_app, app.dp, bot=app.bot)
 
     async def on_startup(_: web.Application) -> None:
+        await app.setup_commands_menu()
         await app.bot.set_webhook(
             url=webhook_url,
             secret_token=settings.webhook_secret_token or None,
