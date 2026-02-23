@@ -7,7 +7,6 @@ from collections import defaultdict
 from typing import Awaitable, Callable
 
 from aiogram import Bot, Dispatcher, F, Router
-from aiogram.filters import Command
 from aiogram.types import Message
 from aiogram.types.bot_command import BotCommand
 from aiogram.types.bot_command_scope_all_group_chats import BotCommandScopeAllGroupChats
@@ -31,9 +30,6 @@ class BotApp:
         self.scheduled_next: dict[int, asyncio.Task] = {}
         self._bot_username: str | None = None
 
-        self.router.message.register(self.cmd_start, Command("start"))
-        self.router.message.register(self.cmd_next, Command("next"))
-        self.router.message.register(self.cmd_stop, Command("stop"))
         self.router.message.register(self.on_command_fallback, F.text.startswith("/"))
         self.router.message.register(self.on_text_message, F.text)
         self.router.channel_post.register(self.on_channel_post_command, F.text.startswith("/"))
