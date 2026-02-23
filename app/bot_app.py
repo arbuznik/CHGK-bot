@@ -33,6 +33,7 @@ class BotApp:
         self.router.message.register(self.cmd_stop, Command("stop"))
         self.router.message.register(self.on_command_fallback, F.text.startswith("/"))
         self.router.message.register(self.on_text_message, F.text)
+        self.router.channel_post.register(self.on_channel_post_text, F.text)
 
     async def _with_chat_lock(self, chat_id: int, fn: Callable[[], Awaitable[None]]) -> None:
         async with self.chat_locks[chat_id]:
@@ -197,7 +198,14 @@ class BotApp:
         # where Telegram sets sender_chat and omits from_user.
         if message.from_user is not None and message.from_user.is_bot:
             return
+        await self._process_answer_message(message)
 
+    async def on_channel_post_text(self, message: Message) -> None:
+        if message.text is None or message.text.startswith("/"):
+            return
+        await self._process_answer_message(message)
+
+    async def _process_answer_message(self, message: Message) -> None:
         async def _run() -> None:
             status, question = self.game.check_answer(message.chat.id, message.text or "")
             if status != "correct" or question is None:
