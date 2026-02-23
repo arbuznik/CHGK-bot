@@ -20,6 +20,13 @@ logger = logging.getLogger(__name__)
 def init_db(session_factory) -> None:
     engine = session_factory.kw["bind"]
     Base.metadata.create_all(engine)
+    # Ensure supergroup chat IDs fit Postgres type (-100xxxxxxxxxx needs BIGINT).
+    if engine.dialect.name == "postgresql":
+        with engine.begin() as conn:
+            conn.exec_driver_sql(
+                "ALTER TABLE IF EXISTS chat_sessions "
+                "ALTER COLUMN chat_id TYPE BIGINT"
+            )
 
 
 async def async_main() -> None:

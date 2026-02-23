@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Optional
 
-from sqlalchemy import Boolean, DateTime, Float, ForeignKey, Integer, String, Text, UniqueConstraint
+from sqlalchemy import BigInteger, Boolean, DateTime, Float, ForeignKey, Integer, String, Text, UniqueConstraint
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 
@@ -53,7 +53,7 @@ class ChatSession(Base):
     __table_args__ = (UniqueConstraint("chat_id", name="uq_chat_sessions_chat_id"),)
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    chat_id: Mapped[int] = mapped_column(Integer, index=True)
+    chat_id: Mapped[int] = mapped_column(BigInteger, index=True)
     state: Mapped[str] = mapped_column(String(64), default="IDLE")
     current_question_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     current_question_message_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
