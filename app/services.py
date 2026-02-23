@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Optional
 
-from sqlalchemy import func, select
+from sqlalchemy import and_, case, func, select
 from sqlalchemy.orm import Session, sessionmaker
 
 from app.config import Settings
@@ -67,19 +67,30 @@ class GameService:
     def _question_bucket(self, q: Question) -> int | None:
         return difficulty_bucket(q.pack_complexity_primary, q.pack_complexity_secondary)
 
+    def _difficulty_score_expr(self):
+        return case(
+            (
+                and_(
+                    Question.pack_complexity_primary.is_not(None),
+                    Question.pack_complexity_secondary.is_not(None),
+                ),
+                (Question.pack_complexity_primary + Question.pack_complexity_secondary) / 2.0,
+            ),
+            (Question.pack_complexity_primary.is_not(None), Question.pack_complexity_primary),
+            else_=Question.pack_complexity_secondary,
+        )
+
     def _next_question(self, db: Session, selected_difficulty: int | None) -> Question | None:
-        rows = db.execute(
-            select(Question)
-            .where(Question.is_used.is_(False))
-            .order_by(func.random())
-            .limit(500)
-        ).scalars().all()
-        if selected_difficulty is None:
-            return rows[0] if rows else None
-        for row in rows:
-            if self._question_bucket(row) == selected_difficulty:
-                return row
-        return None
+        query = select(Question).where(Question.is_used.is_(False))
+        if selected_difficulty is not None:
+            score = self._difficulty_score_expr()
+            lower = selected_difficulty - 0.5
+            upper = selected_difficulty + 0.5
+            if selected_difficulty >= 10:
+                query = query.where(and_(score.is_not(None), score >= lower, score <= upper))
+            else:
+                query = query.where(and_(score.is_not(None), score >= lower, score < upper))
+        return db.execute(query.order_by(func.random()).limit(1)).scalar_one_or_none()
 
     async def start_game(self, chat_id: int, selected_difficulty: int | None) -> tuple[str, Question | None]:
         await self.pool.ensure_pool_if_needed()
