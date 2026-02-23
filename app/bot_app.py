@@ -112,14 +112,13 @@ class BotApp:
 
         await self._with_chat_lock(message.chat.id, _run)
 
-    async def _schedule_next_send(self, message: Message) -> None:
-        chat_id = message.chat.id
+    async def _schedule_next_send_for_chat(self, chat_id: int) -> None:
         self._cancel_scheduled(chat_id)
 
         async def _task() -> None:
             try:
                 await asyncio.sleep(self.settings.next_delay_sec)
-                await self._with_chat_lock(chat_id, lambda: self._send_current_active_question(message))
+                await self._with_chat_lock(chat_id, lambda: self._send_current_active_question(chat_id))
             except asyncio.CancelledError:
                 return
             except Exception:
@@ -127,11 +126,11 @@ class BotApp:
 
         self.scheduled_next[chat_id] = asyncio.create_task(_task())
 
-    async def _send_current_active_question(self, message: Message) -> None:
-        question = self.game.get_active_question(message.chat.id)
+    async def _send_current_active_question(self, chat_id: int) -> None:
+        question = self.game.get_active_question(chat_id)
         if question is None:
             return
-        await self._send_question_to_chat(message.chat.id, question)
+        await self._send_question_to_chat(chat_id, question)
 
     async def _reveal_and_send_next(self, message: Message) -> None:
         status, current, next_q = await self.game.reveal_and_prepare_next(message.chat.id)
@@ -143,7 +142,7 @@ class BotApp:
         if status == "no_questions" or next_q is None:
             await message.answer("Подходящие вопросы закончились. Игра остановлена.")
             return
-        await self._schedule_next_send(message)
+        await self._schedule_next_send_for_chat(message.chat.id)
 
     async def cmd_next(self, message: Message) -> None:
         async def _run() -> None:
@@ -210,7 +209,10 @@ class BotApp:
 
     async def _process_answer_message(self, message: Message) -> None:
         async def _run() -> None:
-            status, question = self.game.check_answer(message.chat.id, message.text or "")
+            sender_chat_id = message.sender_chat.id if message.sender_chat is not None else None
+            status, question, target_chat_id = self.game.check_answer_with_candidates(
+                message.chat.id, sender_chat_id, message.text or ""
+            )
             if status != "correct" or question is None:
                 return
 
@@ -220,13 +222,13 @@ class BotApp:
                 name = message.sender_chat.title or "Игрок"
             else:
                 name = "Игрок"
-            await message.answer(f"✅ {html.escape(name)}, правильный ответ!")
-            await message.answer(self._format_answer(question), parse_mode="HTML")
-            prep_status, next_question = await self.game.prepare_next_after_correct(message.chat.id)
+            await self.bot.send_message(chat_id=target_chat_id, text=f"✅ {html.escape(name)}, правильный ответ!")
+            await self.bot.send_message(chat_id=target_chat_id, text=self._format_answer(question), parse_mode="HTML")
+            prep_status, next_question = await self.game.prepare_next_after_correct(target_chat_id)
             if prep_status == "no_questions" or next_question is None:
-                await message.answer("Подходящие вопросы закончились. Игра остановлена.")
+                await self.bot.send_message(chat_id=target_chat_id, text="Подходящие вопросы закончились. Игра остановлена.")
                 return
-            await self._schedule_next_send(message)
+            await self._schedule_next_send_for_chat(target_chat_id)
 
         await self._with_chat_lock(message.chat.id, _run)
 

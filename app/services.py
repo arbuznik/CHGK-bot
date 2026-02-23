@@ -4,6 +4,7 @@ import asyncio
 import logging
 from dataclasses import dataclass
 from datetime import datetime
+from typing import Optional
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session, sessionmaker
@@ -177,6 +178,19 @@ class GameService:
                 db.commit()
                 return "correct", q
             return "wrong", q
+
+    def check_answer_with_candidates(
+        self, chat_id: int, sender_chat_id: Optional[int], user_text: str
+    ) -> tuple[str, Question | None, int]:
+        status, question = self.check_answer(chat_id, user_text)
+        if status != "no_active":
+            return status, question, chat_id
+
+        if sender_chat_id is not None and sender_chat_id != chat_id:
+            status2, question2 = self.check_answer(sender_chat_id, user_text)
+            return status2, question2, sender_chat_id
+
+        return status, question, chat_id
 
     def stop_game(self, chat_id: int) -> SessionStats:
         with self.session_factory() as db:
