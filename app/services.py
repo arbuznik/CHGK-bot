@@ -32,12 +32,39 @@ class PoolService:
         self.session_factory = session_factory
         self.parser = GotQuestionsParser(settings)
         self._replenish_lock = asyncio.Lock()
+        self._replenish_task: asyncio.Task | None = None
+        self._background_task: asyncio.Task | None = None
 
     async def ensure_pool_if_needed(self) -> None:
         if self._replenish_lock.locked():
             return
         async with self._replenish_lock:
             await asyncio.to_thread(self._replenish_sync)
+
+    def trigger_background_replenish(self) -> None:
+        if self._replenish_task and not self._replenish_task.done():
+            return
+        self._replenish_task = asyncio.create_task(self.ensure_pool_if_needed())
+
+    def start_background_loop(self, interval_sec: int = 30) -> None:
+        if self._background_task and not self._background_task.done():
+            return
+
+        async def _loop() -> None:
+            while True:
+                self.trigger_background_replenish()
+                await asyncio.sleep(interval_sec)
+
+        self._background_task = asyncio.create_task(_loop())
+
+    async def stop_background_loop(self) -> None:
+        if self._background_task and not self._background_task.done():
+            self._background_task.cancel()
+            try:
+                await self._background_task
+            except asyncio.CancelledError:
+                pass
+        self._background_task = None
 
     def _replenish_sync(self) -> None:
         with self.session_factory() as db:
@@ -93,6 +120,7 @@ class GameService:
         return db.execute(query.order_by(func.random()).limit(1)).scalar_one_or_none()
 
     async def start_game(self, chat_id: int, selected_difficulty: int | None) -> tuple[str, Question | None]:
+        self.pool.trigger_background_replenish()
         with self.session_factory() as db:
             session = self.get_or_create_session(db, chat_id)
             if session.state != "IDLE":
@@ -115,30 +143,7 @@ class GameService:
                 db.commit()
                 return "ok", question
 
-        await self.pool.ensure_pool_if_needed()
-        with self.session_factory() as db:
-            session = self.get_or_create_session(db, chat_id)
-            if session.state != "IDLE":
-                return "already_running", None
-
-            question = self._next_question(db, selected_difficulty)
-            if question is None:
-                return "no_questions", None
-
-            question.is_used = True
-            question.updated_at = datetime.utcnow()
-            session.state = "QUESTION_ACTIVE"
-            session.selected_difficulty = selected_difficulty
-            session.current_question_id = question.question_id
-            session.current_question_message_id = None
-            session.session_asked_count = 1
-            session.session_taken_count = 0
-            session.session_complexity_primary_sum = float(question.pack_complexity_primary or 0.0)
-            session.session_complexity_secondary_sum = float(question.pack_complexity_secondary or 0.0)
-            session.session_complexity_count = 1 if (question.pack_complexity_primary is not None or question.pack_complexity_secondary is not None) else 0
-            session.updated_at = datetime.utcnow()
-            db.commit()
-            return "ok", question
+        return "no_questions", None
 
     def set_current_message_id(self, chat_id: int, message_id: int) -> None:
         with self.session_factory() as db:
@@ -171,6 +176,7 @@ class GameService:
     async def _prepare_next_for_chat(
         self, chat_id: int, return_current: bool = True
     ) -> tuple[str, Question | None, Question | None] | tuple[str, Question | None]:
+        self.pool.trigger_background_replenish()
         with self.session_factory() as db:
             session = self.get_or_create_session(db, chat_id)
             current = db.get(Question, session.current_question_id) if session.current_question_id else None
@@ -196,41 +202,17 @@ class GameService:
                     return "ok", current, next_q
                 return "ok", next_q
 
-        await self.pool.ensure_pool_if_needed()
         with self.session_factory() as db:
             session = self.get_or_create_session(db, chat_id)
             current = db.get(Question, session.current_question_id) if session.current_question_id else None
-            if session.state != "ANSWER_PENDING_NEXT":
-                if return_current:
-                    return "no_active", current, None
-                return "no_active", None
-
-            next_q = self._next_question(db, session.selected_difficulty)
-            if next_q is None:
-                session.state = "IDLE"
-                session.selected_difficulty = None
-                session.current_question_id = None
-                session.current_question_message_id = None
-                db.commit()
-                if return_current:
-                    return "no_questions", current, None
-                return "no_questions", None
-
-            next_q.is_used = True
-            next_q.updated_at = datetime.utcnow()
-            session.current_question_id = next_q.question_id
+            session.state = "IDLE"
+            session.selected_difficulty = None
+            session.current_question_id = None
             session.current_question_message_id = None
-            session.state = "QUESTION_ACTIVE"
-            session.session_asked_count += 1
-            if next_q.pack_complexity_primary is not None or next_q.pack_complexity_secondary is not None:
-                session.session_complexity_count += 1
-                session.session_complexity_primary_sum += float(next_q.pack_complexity_primary or 0.0)
-                session.session_complexity_secondary_sum += float(next_q.pack_complexity_secondary or 0.0)
-            session.updated_at = datetime.utcnow()
             db.commit()
             if return_current:
-                return "ok", current, next_q
-            return "ok", next_q
+                return "no_questions", current, None
+            return "no_questions", None
 
     def check_answer(self, chat_id: int, user_text: str) -> tuple[str, Question | None]:
         with self.session_factory() as db:

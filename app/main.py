@@ -75,8 +75,13 @@ async def async_main() -> None:
     app = BotApp(settings, game)
 
     if settings.bot_mode == "polling":
-        await app.run_polling()
-        return
+        pool.start_background_loop()
+        pool.trigger_background_replenish()
+        try:
+            await app.run_polling()
+            return
+        finally:
+            await pool.stop_background_loop()
 
     if settings.bot_mode != "webhook":
         raise RuntimeError("BOT_MODE must be either 'polling' or 'webhook'")
@@ -104,6 +109,8 @@ async def async_main() -> None:
     setup_application(aio_app, app.dp, bot=app.bot)
 
     async def on_startup(_: web.Application) -> None:
+        pool.start_background_loop()
+        pool.trigger_background_replenish()
         await app.setup_commands_menu()
         await app.bot.set_webhook(
             url=webhook_url,
@@ -114,6 +121,7 @@ async def async_main() -> None:
 
     async def on_shutdown(_: web.Application) -> None:
         await app.bot.delete_webhook()
+        await pool.stop_background_loop()
 
     aio_app.on_startup.append(on_startup)
     aio_app.on_shutdown.append(on_shutdown)

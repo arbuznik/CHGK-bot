@@ -17,6 +17,8 @@ from app.models import Pack, Question
 logger = logging.getLogger(__name__)
 
 _NEXT_CHUNK_RE = re.compile(r'self\.__next_f\.push\(\[1,"(.*?)"\]\)</script>', re.S)
+_MIN_READY_PER_LEVEL = 10
+_MAX_READY_PER_LEVEL = 50
 
 
 @dataclass
@@ -181,7 +183,7 @@ class GotQuestionsParser:
             return False
         if bucket not in needed_categories:
             return False
-        if ready_by_category.get(bucket, 0) >= self.settings.max_ready_questions:
+        if ready_by_category.get(bucket, 0) >= _MAX_READY_PER_LEVEL:
             return False
 
         take_num, take_den, take_percent = self._calc_take(q)
@@ -229,7 +231,7 @@ class GotQuestionsParser:
     def replenish_if_needed(self, db: Session) -> ReplenishResult:
         ready_by_category = self.count_ready_by_category(db)
         needed_categories = {
-            level for level in range(1, 11) if ready_by_category.get(level, 0) <= self.settings.min_ready_questions
+            level for level in range(1, 11) if ready_by_category.get(level, 0) < _MIN_READY_PER_LEVEL
         }
         if not needed_categories:
             return ReplenishResult(
@@ -252,7 +254,7 @@ class GotQuestionsParser:
                 break
 
             for pack_id in pack_ids:
-                if all(ready_by_category.get(level, 0) >= self.settings.max_ready_questions for level in needed_categories):
+                if all(ready_by_category.get(level, 0) >= _MAX_READY_PER_LEVEL for level in needed_categories):
                     db.commit()
                     return ReplenishResult(
                         added_questions=added,
