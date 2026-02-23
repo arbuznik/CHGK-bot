@@ -161,6 +161,9 @@ class BotApp:
         cmd = text.split()[0].lower()
         cmd_name = cmd.split("@", 1)[0]
 
+        if message.chat.type in {"group", "supergroup"} and cmd_name in {"/start", "/next", "/stop"}:
+            await message.answer("Команда получена, обрабатываю...")
+
         if cmd_name == "/start":
             await self.cmd_start(message)
             return
