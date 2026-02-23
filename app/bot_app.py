@@ -196,9 +196,10 @@ class BotApp:
     async def on_text_message(self, message: Message) -> None:
         if message.text is None or message.text.startswith("/"):
             return
-        # Ignore bot-authored messages, but allow anonymous admin messages
-        # where Telegram sets sender_chat and omits from_user.
-        if message.from_user is not None and message.from_user.is_bot:
+        # Ignore bot-authored messages, but allow anonymous chat sender mode.
+        # In anonymous mode Telegram may send from_user=GroupAnonymousBot (is_bot=true)
+        # together with sender_chat - these answers must be processed.
+        if message.from_user is not None and message.from_user.is_bot and message.sender_chat is None:
             return
         await self._process_answer_message(message)
 
