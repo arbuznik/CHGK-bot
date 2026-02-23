@@ -36,6 +36,7 @@ class BotApp:
         self.router.message.register(self.cmd_stop, Command("stop"))
         self.router.message.register(self.on_command_fallback, F.text.startswith("/"))
         self.router.message.register(self.on_text_message, F.text)
+        self.router.channel_post.register(self.on_channel_post_command, F.text.startswith("/"))
         self.router.channel_post.register(self.on_channel_post_text, F.text)
 
     async def _with_chat_lock(self, chat_id: int, fn: Callable[[], Awaitable[None]]) -> None:
@@ -197,6 +198,12 @@ class BotApp:
         await self._with_chat_lock(message.chat.id, _run)
 
     async def on_command_fallback(self, message: Message) -> None:
+        await self._dispatch_command_message(message)
+
+    async def on_channel_post_command(self, message: Message) -> None:
+        await self._dispatch_command_message(message)
+
+    async def _dispatch_command_message(self, message: Message) -> None:
         if message.text is None:
             return
         text = message.text.strip()
