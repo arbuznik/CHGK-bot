@@ -20,13 +20,30 @@ logger = logging.getLogger(__name__)
 def init_db(session_factory) -> None:
     engine = session_factory.kw["bind"]
     Base.metadata.create_all(engine)
-    # Ensure supergroup chat IDs fit Postgres type (-100xxxxxxxxxx needs BIGINT).
-    if engine.dialect.name == "postgresql":
-        with engine.begin() as conn:
+    with engine.begin() as conn:
+        # Ensure supergroup chat IDs fit Postgres type (-100xxxxxxxxxx needs BIGINT).
+        if engine.dialect.name == "postgresql":
             conn.exec_driver_sql(
                 "ALTER TABLE IF EXISTS chat_sessions "
                 "ALTER COLUMN chat_id TYPE BIGINT"
             )
+            col_exists = conn.exec_driver_sql(
+                "SELECT 1 FROM information_schema.columns "
+                "WHERE table_name='chat_sessions' AND column_name='selected_difficulty'"
+            ).scalar_one_or_none()
+            if col_exists is None:
+                conn.exec_driver_sql(
+                    "ALTER TABLE chat_sessions "
+                    "ADD COLUMN selected_difficulty INTEGER NULL"
+                )
+        elif engine.dialect.name == "sqlite":
+            rows = conn.exec_driver_sql("PRAGMA table_info(chat_sessions)").fetchall()
+            has_col = any(r[1] == "selected_difficulty" for r in rows)
+            if not has_col:
+                conn.exec_driver_sql(
+                    "ALTER TABLE chat_sessions "
+                    "ADD COLUMN selected_difficulty INTEGER"
+                )
 
 
 async def async_main() -> None:

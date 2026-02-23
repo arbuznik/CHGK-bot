@@ -52,12 +52,20 @@ def get_settings() -> Settings:
     if not webhook_base_url and koyeb_domain:
         webhook_base_url = f"https://{koyeb_domain}"
 
+    database_url = os.getenv("DATABASE_URL", "sqlite:///./data/chgk_bot.db").strip()
+    # Koyeb/other providers often expose postgres URL without explicit driver.
+    # Normalize to psycopg driver since we ship psycopg binary package.
+    if database_url.startswith("postgres://"):
+        database_url = "postgresql+psycopg://" + database_url[len("postgres://") :]
+    elif database_url.startswith("postgresql://") and "+psycopg" not in database_url:
+        database_url = "postgresql+psycopg://" + database_url[len("postgresql://") :]
+
     return Settings(
         bot_token=token,
         bot_mode=os.getenv("BOT_MODE", "polling").strip().lower(),
-        database_url=os.getenv("DATABASE_URL", "sqlite:///./data/chgk_bot.db"),
+        database_url=database_url,
         next_delay_sec=_env_int("NEXT_DELAY_SEC", 2),
-        min_ready_questions=_env_int("MIN_READY_QUESTIONS", 20),
+        min_ready_questions=_env_int("MIN_READY_QUESTIONS", 10),
         max_ready_questions=_env_int("MAX_READY_QUESTIONS", 50),
         likes_dislikes_ratio_min=_env_float("LIKES_DISLIKES_RATIO_MIN", 15.0),
         min_likes=_env_int("MIN_LIKES", 5),

@@ -11,6 +11,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.config import Settings
+from app.difficulty import difficulty_bucket
 from app.models import Pack, Question
 
 logger = logging.getLogger(__name__)
@@ -140,7 +141,14 @@ class GotQuestionsParser:
         existing.updated_at = now
         return existing
 
-    def _upsert_question(self, db: Session, pack: dict, q: dict) -> bool:
+    def _upsert_question(
+        self,
+        db: Session,
+        pack: dict,
+        q: dict,
+        needed_categories: set[int],
+        ready_by_category: dict[int, int],
+    ) -> bool:
         question_id = int(q["id"])
         existing = db.get(Question, question_id)
         likes = int(q.get("totalLikes") or 0)
@@ -152,11 +160,18 @@ class GotQuestionsParser:
         if not self._question_passes_filter(likes, dislikes):
             return False
 
-        take_num, take_den, take_percent = self._calc_take(q)
-
         truedl = pack.get("trueDl") if isinstance(pack.get("trueDl"), list) else []
         c1 = truedl[0] if len(truedl) > 0 and isinstance(truedl[0], (int, float)) else None
         c2 = truedl[1] if len(truedl) > 1 and isinstance(truedl[1], (int, float)) else None
+        bucket = difficulty_bucket(c1, c2)
+        if bucket is None:
+            return False
+        if bucket not in needed_categories:
+            return False
+        if ready_by_category.get(bucket, 0) >= self.settings.max_ready_questions:
+            return False
+
+        take_num, take_den, take_percent = self._calc_take(q)
 
         row = Question(
             question_id=question_id,
@@ -181,19 +196,33 @@ class GotQuestionsParser:
             updated_at=datetime.utcnow(),
         )
         db.add(row)
+        ready_by_category[bucket] = ready_by_category.get(bucket, 0) + 1
         return True
 
-    def count_ready(self, db: Session) -> int:
-        return len(
-            db.execute(
-                select(Question.question_id).where(Question.is_used.is_(False))
-            ).scalars().all()
-        )
+    def count_ready_by_category(self, db: Session) -> dict[int, int]:
+        rows = db.execute(
+            select(Question.pack_complexity_primary, Question.pack_complexity_secondary)
+            .where(Question.is_used.is_(False))
+        ).all()
+        out = {level: 0 for level in range(1, 11)}
+        for c1, c2 in rows:
+            bucket = difficulty_bucket(c1, c2)
+            if bucket is None:
+                continue
+            out[bucket] = out.get(bucket, 0) + 1
+        return out
 
     def replenish_if_needed(self, db: Session) -> ReplenishResult:
-        ready = self.count_ready(db)
-        if ready > self.settings.min_ready_questions:
-            return ReplenishResult(added_questions=0, ready_count=ready, pages_scanned=0)
+        ready_by_category = self.count_ready_by_category(db)
+        needed_categories = {
+            level for level in range(1, 11) if ready_by_category.get(level, 0) <= self.settings.min_ready_questions
+        }
+        if not needed_categories:
+            return ReplenishResult(
+                added_questions=0,
+                ready_count=sum(ready_by_category.values()),
+                pages_scanned=0,
+            )
 
         added = 0
         pages = 0
@@ -209,9 +238,13 @@ class GotQuestionsParser:
                 break
 
             for pack_id in pack_ids:
-                if self.count_ready(db) >= self.settings.max_ready_questions:
+                if all(ready_by_category.get(level, 0) >= self.settings.max_ready_questions for level in needed_categories):
                     db.commit()
-                    return ReplenishResult(added_questions=added, ready_count=self.count_ready(db), pages_scanned=pages)
+                    return ReplenishResult(
+                        added_questions=added,
+                        ready_count=sum(ready_by_category.values()),
+                        pages_scanned=pages,
+                    )
 
                 try:
                     pack = self.fetch_pack(pack_id)
@@ -229,11 +262,15 @@ class GotQuestionsParser:
                     questions = tour.get("questions") if isinstance(tour, dict) and isinstance(tour.get("questions"), list) else []
                     for q in questions:
                         try:
-                            if self._upsert_question(db, pack, q):
+                            if self._upsert_question(db, pack, q, needed_categories, ready_by_category):
                                 added += 1
                         except Exception:
                             logger.exception("Failed to upsert question in pack id=%s", pack_id)
 
                 db.commit()
 
-        return ReplenishResult(added_questions=added, ready_count=self.count_ready(db), pages_scanned=pages)
+        return ReplenishResult(
+            added_questions=added,
+            ready_count=sum(ready_by_category.values()),
+            pages_scanned=pages,
+        )

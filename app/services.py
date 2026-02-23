@@ -6,10 +6,11 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Optional
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session, sessionmaker
 
 from app.config import Settings
+from app.difficulty import difficulty_bucket
 from app.matcher import is_correct_answer
 from app.models import ChatSession, Question
 from app.parser import GotQuestionsParser
@@ -58,20 +59,29 @@ class GameService:
     def get_or_create_session(self, db: Session, chat_id: int) -> ChatSession:
         row = db.execute(select(ChatSession).where(ChatSession.chat_id == chat_id)).scalar_one_or_none()
         if row is None:
-            row = ChatSession(chat_id=chat_id, state="IDLE", updated_at=datetime.utcnow())
+            row = ChatSession(chat_id=chat_id, state="IDLE", selected_difficulty=None, updated_at=datetime.utcnow())
             db.add(row)
             db.flush()
         return row
 
-    def _next_question(self, db: Session) -> Question | None:
-        return db.execute(
+    def _question_bucket(self, q: Question) -> int | None:
+        return difficulty_bucket(q.pack_complexity_primary, q.pack_complexity_secondary)
+
+    def _next_question(self, db: Session, selected_difficulty: int | None) -> Question | None:
+        rows = db.execute(
             select(Question)
             .where(Question.is_used.is_(False))
-            .order_by(Question.pack_id.desc(), Question.number_in_pack.asc())
-            .limit(1)
-        ).scalar_one_or_none()
+            .order_by(func.random())
+            .limit(500)
+        ).scalars().all()
+        if selected_difficulty is None:
+            return rows[0] if rows else None
+        for row in rows:
+            if self._question_bucket(row) == selected_difficulty:
+                return row
+        return None
 
-    async def start_game(self, chat_id: int) -> tuple[str, Question | None]:
+    async def start_game(self, chat_id: int, selected_difficulty: int | None) -> tuple[str, Question | None]:
         await self.pool.ensure_pool_if_needed()
 
         with self.session_factory() as db:
@@ -79,13 +89,14 @@ class GameService:
             if session.state != "IDLE":
                 return "already_running", None
 
-            question = self._next_question(db)
+            question = self._next_question(db, selected_difficulty)
             if question is None:
                 return "no_questions", None
 
             question.is_used = True
             question.updated_at = datetime.utcnow()
             session.state = "QUESTION_ACTIVE"
+            session.selected_difficulty = selected_difficulty
             session.current_question_id = question.question_id
             session.current_question_message_id = None
             session.session_asked_count = 1
@@ -137,9 +148,10 @@ class GameService:
                 if return_current:
                     return "no_active", current, None
                 return "no_active", None
-            next_q = self._next_question(db)
+            next_q = self._next_question(db, session.selected_difficulty)
             if next_q is None:
                 session.state = "IDLE"
+                session.selected_difficulty = None
                 session.current_question_id = None
                 session.current_question_message_id = None
                 db.commit()
@@ -205,6 +217,7 @@ class GameService:
                 complexity_secondary_avg=secondary_avg,
             )
             session.state = "IDLE"
+            session.selected_difficulty = None
             session.current_question_id = None
             session.current_question_message_id = None
             session.scheduled_next_at = None

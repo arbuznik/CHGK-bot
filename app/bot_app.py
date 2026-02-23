@@ -98,7 +98,11 @@ class BotApp:
     async def cmd_start(self, message: Message) -> None:
         async def _run() -> None:
             try:
-                status, q = await self.game.start_game(message.chat.id)
+                selected_difficulty = self._parse_start_difficulty(message.text or "")
+                if selected_difficulty == -1:
+                    await message.answer("Использование: /start [сложность 1-10]. Пример: /start 6")
+                    return
+                status, q = await self.game.start_game(message.chat.id, None if selected_difficulty == 0 else selected_difficulty)
                 if status == "already_running":
                     await message.answer("Игра уже запущена. Используй /next или /stop.")
                     return
@@ -111,6 +115,20 @@ class BotApp:
                 await message.answer("Ошибка при запуске игры. Попробуй еще раз через несколько секунд.")
 
         await self._with_chat_lock(message.chat.id, _run)
+
+    def _parse_start_difficulty(self, text: str) -> int:
+        parts = text.strip().split()
+        if len(parts) == 1:
+            return 0
+        if len(parts) != 2:
+            return -1
+        raw = parts[1].strip()
+        if not raw.isdigit():
+            return -1
+        value = int(raw)
+        if value < 1 or value > 10:
+            return -1
+        return value
 
     async def _schedule_next_send_for_chat(self, chat_id: int) -> None:
         self._cancel_scheduled(chat_id)
@@ -239,7 +257,7 @@ class BotApp:
 
     async def setup_commands_menu(self) -> None:
         commands = [
-            BotCommand(command="start", description="Начать игру и дать вопрос"),
+            BotCommand(command="start", description="Старт игры: /start или /start 1-10"),
             BotCommand(command="next", description="Показать ответ и следующий вопрос"),
             BotCommand(command="stop", description="Остановить игру и показать статистику"),
         ]

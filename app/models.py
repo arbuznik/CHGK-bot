@@ -57,6 +57,7 @@ class ChatSession(Base):
     state: Mapped[str] = mapped_column(String(64), default="IDLE")
     current_question_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     current_question_message_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    selected_difficulty: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     scheduled_next_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
     lock_version: Mapped[int] = mapped_column(Integer, default=0)
     session_asked_count: Mapped[int] = mapped_column(Integer, default=0)
