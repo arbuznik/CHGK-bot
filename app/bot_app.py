@@ -26,6 +26,7 @@ class BotApp:
         self.dp.include_router(self.router)
         self.chat_locks: dict[int, asyncio.Lock] = defaultdict(asyncio.Lock)
         self.scheduled_next: dict[int, asyncio.Task] = {}
+        self._bot_username: str | None = None
 
         self.router.message.register(self.cmd_start, Command("start"))
         self.router.message.register(self.cmd_next, Command("next"))
@@ -159,7 +160,14 @@ class BotApp:
             return
         text = message.text.strip()
         cmd = text.split()[0].lower()
-        cmd_name = cmd.split("@", 1)[0]
+        cmd_name, mention = (cmd.split("@", 1) + [""])[:2]
+
+        if mention:
+            if self._bot_username is None:
+                me = await self.bot.get_me()
+                self._bot_username = (me.username or "").lower()
+            if mention.lower() != (self._bot_username or ""):
+                return
 
         if message.chat.type in {"group", "supergroup"} and cmd_name in {"/start", "/next", "/stop"}:
             await message.answer("Команда получена, обрабатываю...")
