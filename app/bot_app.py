@@ -189,8 +189,8 @@ class BotApp:
                 parsed = self._parse_start_params(message.text or "")
                 if parsed is None:
                     await message.answer(
-                        "Использование: /start [сложность 1-10] [мин лайков >=1] [мин % взятий >=0]. "
-                        "Пример: /start 6 3 20. По умолчанию: /start = лайки>=1, %взятий>=20."
+                        "Использование: /start [сложность 0-10] [мин лайков >=1] [мин % взятий >=0]. "
+                        "0 = рандом. Пример: /start 0 4 31. По умолчанию: /start = рандом, лайки>=1, %взятий>=20."
                     )
                     return
                 selected_difficulty, min_likes, min_take_percent = parsed
@@ -252,7 +252,7 @@ class BotApp:
             if not raw_diff.isdigit():
                 return None
             selected_difficulty = int(raw_diff)
-            if selected_difficulty < 1 or selected_difficulty > 10:
+            if selected_difficulty < 0 or selected_difficulty > 10:
                 return None
 
         if len(parts) >= 3:
@@ -414,7 +414,7 @@ class BotApp:
 
     async def setup_commands_menu(self) -> None:
         commands = [
-            BotCommand(command="start", description="Старт: /start [сложн] [мин лайков] [>= % взятия], дефолт: рандом/1/20%"),
+            BotCommand(command="start", description="Старт: /start [0-10] [лайки] [%], 0=рандом, дефолт: /start"),
             BotCommand(command="next", description="Показать ответ и следующий вопрос"),
             BotCommand(command="stop", description="Остановить игру и показать статистику"),
         ]
