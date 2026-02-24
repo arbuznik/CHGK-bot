@@ -131,16 +131,6 @@ class GameService:
         )
         query = select(Question).where(
             ~exists(used_subquery),
-            (
-                (Question.likes >= 3)
-                | (
-                    Question.take_den.is_not(None)
-                    & (Question.take_den >= 10)
-                    & Question.take_percent.is_not(None)
-                    & (Question.take_percent >= 20.0)
-                    & (Question.take_percent <= 90.0)
-                )
-            ),
         )
 
         if selected_difficulty is not None:
