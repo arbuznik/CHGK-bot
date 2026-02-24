@@ -24,7 +24,6 @@ def format_report(result) -> str:
         result.questions_existing
         + result.questions_filtered_likes
         + result.questions_filtered_bucket_missing
-        + result.questions_filtered_target_full
     )
     return (
         "Отчет парсера (ручной CLI запуск)\n"
@@ -45,7 +44,6 @@ def format_report(result) -> str:
         f"Отсечено как уже существующие: {result.questions_existing}\n"
         f"Отсечено по фильтру лайков/рейтинга: {result.questions_filtered_likes}\n"
         f"Отсечено без валидной сложности: {result.questions_filtered_bucket_missing}\n"
-        f"Отсечено т.к. уровень уже заполнен: {result.questions_filtered_target_full}\n"
         f"Добавлено по уровням: {' | '.join(levels)}"
     )
 

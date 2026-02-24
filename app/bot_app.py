@@ -102,7 +102,6 @@ class BotApp:
             result.questions_existing
             + result.questions_filtered_likes
             + result.questions_filtered_bucket_missing
-            + result.questions_filtered_target_full
         )
         return (
             f"{title}\n"
@@ -123,7 +122,6 @@ class BotApp:
             f"Отсечено как уже существующие: {result.questions_existing}\n"
             f"Отсечено по фильтру лайков/рейтинга: {result.questions_filtered_likes}\n"
             f"Отсечено без валидной сложности: {result.questions_filtered_bucket_missing}\n"
-            f"Отсечено т.к. уровень уже заполнен: {result.questions_filtered_target_full}\n"
             f"Добавлено по уровням: {' | '.join(levels)}"
         )
 
@@ -184,10 +182,6 @@ class BotApp:
                     logger.exception("Failed to send replenish error message for chat_id=%s", chat_id)
 
         self.replenish_tasks[chat_id] = asyncio.create_task(_task())
-
-    async def run_startup_parser_batch(self) -> None:
-        result = await self.game.pool.run_startup_batch()
-        await self._send_parser_report("Отчет парсера (стартовый батч)", result)
 
     async def cmd_start(self, message: Message) -> None:
         async def _run() -> None:

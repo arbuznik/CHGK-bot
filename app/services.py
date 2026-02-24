@@ -43,13 +43,6 @@ class PoolService:
         async with self._replenish_lock:
             return await asyncio.to_thread(self._replenish_sync)
 
-    async def run_startup_batch(self) -> ReplenishResult:
-        if self._replenish_lock.locked():
-            async with self._replenish_lock:
-                return ReplenishResult(added_questions=0, ready_count=0, pages_scanned=0)
-        async with self._replenish_lock:
-            return await asyncio.to_thread(self._startup_batch_sync)
-
     async def run_manual_batch(self, cursor_start: int | None = None, max_batches: int = 1) -> ReplenishResult:
         if self._replenish_lock.locked():
             async with self._replenish_lock:
@@ -70,24 +63,6 @@ class PoolService:
                 result.added_questions,
                 result.ready_count,
                 result.pages_scanned,
-                result.packs_checked,
-                result.cursor_before,
-                result.cursor_after,
-            )
-            return result
-
-    def _startup_batch_sync(self) -> ReplenishResult:
-        with self.session_factory() as db:
-            result = self.parser.replenish_cursor_batches(
-                db,
-                target_per_level=self.settings.replenish_target_per_level,
-                batch_size=self.settings.parser_batch_size,
-                max_batches=1,
-            )
-            logger.info(
-                "Startup parser batch: added=%s ready=%s packs_checked=%s cursor=%s->%s",
-                result.added_questions,
-                result.ready_count,
                 result.packs_checked,
                 result.cursor_before,
                 result.cursor_after,

@@ -42,7 +42,6 @@ class ReplenishResult:
     questions_existing: int = 0
     questions_filtered_likes: int = 0
     questions_filtered_bucket_missing: int = 0
-    questions_filtered_target_full: int = 0
     questions_added_by_level: dict[int, int] = field(default_factory=dict)
 
 
@@ -168,7 +167,6 @@ class GotQuestionsParser:
         db: Session,
         pack: dict,
         q: dict,
-        target_per_level: int,
         ready_by_category: dict[int, int],
         result: ReplenishResult,
     ) -> bool:
@@ -204,9 +202,6 @@ class GotQuestionsParser:
         bucket = difficulty_bucket(c1, c2)
         if bucket is None:
             result.questions_filtered_bucket_missing += 1
-            return False
-        if ready_by_category.get(bucket, 0) >= target_per_level:
-            result.questions_filtered_target_full += 1
             return False
 
         row = Question(
@@ -274,9 +269,6 @@ class GotQuestionsParser:
     ) -> ReplenishResult:
         started = time.monotonic()
         ready_by_category = self.count_ready_by_category(db)
-        needed_categories = {level for level in range(1, 11) if ready_by_category.get(level, 0) < target_per_level}
-        if not needed_categories:
-            return ReplenishResult(added_questions=0, ready_count=sum(ready_by_category.values()), pages_scanned=0)
 
         state = self._get_or_create_state(db)
         cursor = state.cursor_pack_id or 0
@@ -296,9 +288,6 @@ class GotQuestionsParser:
         current = cursor
         batches_done = 0
         while batches_done < max_batches and current > 0:
-            if all(ready_by_category.get(level, 0) >= target_per_level for level in needed_categories):
-                break
-
             batch_start = current
             batch_end = max(current - batch_size + 1, 1)
             if result.batch_start_pack_id is None:
@@ -338,7 +327,7 @@ class GotQuestionsParser:
                         for q in questions:
                             result.questions_seen_total += 1
                             try:
-                                if self._upsert_question(db, pack, q, target_per_level, ready_by_category, result):
+                                if self._upsert_question(db, pack, q, ready_by_category, result):
                                     result.added_questions += 1
                             except Exception:
                                 result.parser_errors += 1
