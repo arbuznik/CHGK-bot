@@ -77,3 +77,11 @@ class ChatQuestionUsage(Base):
     chat_id: Mapped[int] = mapped_column(BigInteger, index=True)
     question_id: Mapped[int] = mapped_column(ForeignKey("questions.question_id"), index=True)
     used_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)
+
+
+class ParserState(Base):
+    __tablename__ = "parser_state"
+
+    key: Mapped[str] = mapped_column(String(64), primary_key=True)
+    cursor_pack_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)

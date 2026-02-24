@@ -13,7 +13,7 @@ from sqlalchemy.orm import Session, sessionmaker
 from app.config import Settings
 from app.matcher import is_correct_answer
 from app.models import ChatQuestionUsage, ChatSession, Question
-from app.parser import GotQuestionsParser
+from app.parser import GotQuestionsParser, ReplenishResult
 
 logger = logging.getLogger(__name__)
 
@@ -33,23 +33,56 @@ class PoolService:
         self.parser = GotQuestionsParser(settings)
         self._replenish_lock = asyncio.Lock()
 
-    async def replenish_to_target(self) -> None:
+    async def replenish_to_target(self) -> ReplenishResult:
         if self._replenish_lock.locked():
             async with self._replenish_lock:
-                return
+                return ReplenishResult(added_questions=0, ready_count=0, pages_scanned=0)
         async with self._replenish_lock:
-            await asyncio.to_thread(self._replenish_sync)
+            return await asyncio.to_thread(self._replenish_sync)
 
-    def _replenish_sync(self) -> None:
+    async def run_startup_batch(self) -> ReplenishResult:
+        if self._replenish_lock.locked():
+            async with self._replenish_lock:
+                return ReplenishResult(added_questions=0, ready_count=0, pages_scanned=0)
+        async with self._replenish_lock:
+            return await asyncio.to_thread(self._startup_batch_sync)
+
+    def _replenish_sync(self) -> ReplenishResult:
         with self.session_factory() as db:
-            result = self.parser.replenish_to_target(db, self.settings.replenish_target_per_level)
+            result = self.parser.replenish_cursor_batches(
+                db,
+                target_per_level=self.settings.replenish_target_per_level,
+                batch_size=self.settings.parser_batch_size,
+                max_batches=self.settings.parser_max_batches_per_run,
+            )
             logger.info(
-                "Pool replenish: added=%s ready=%s pages=%s target_per_level=%s",
+                "Pool replenish: added=%s ready=%s batches=%s packs_checked=%s cursor=%s->%s",
                 result.added_questions,
                 result.ready_count,
                 result.pages_scanned,
-                self.settings.replenish_target_per_level,
+                result.packs_checked,
+                result.cursor_before,
+                result.cursor_after,
             )
+            return result
+
+    def _startup_batch_sync(self) -> ReplenishResult:
+        with self.session_factory() as db:
+            result = self.parser.replenish_cursor_batches(
+                db,
+                target_per_level=self.settings.replenish_target_per_level,
+                batch_size=self.settings.parser_batch_size,
+                max_batches=1,
+            )
+            logger.info(
+                "Startup parser batch: added=%s ready=%s packs_checked=%s cursor=%s->%s",
+                result.added_questions,
+                result.ready_count,
+                result.packs_checked,
+                result.cursor_before,
+                result.cursor_after,
+            )
+            return result
 
 
 class GameService:

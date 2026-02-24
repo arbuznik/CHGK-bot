@@ -94,6 +94,35 @@ class BotApp:
             lines.append(f"<b>Взяли:</b> {question.take_num}/{question.take_den} · {percent:.2f}%")
         return "\n".join(lines)
 
+    def _format_parser_report(self, title: str, result) -> str:
+        levels = []
+        for level in range(1, 11):
+            levels.append(f"{level}:{result.questions_added_by_level.get(level, 0)}")
+        return (
+            f"{title}\n"
+            f"Добавлено вопросов: {result.added_questions}\n"
+            f"Паков проверено: {result.packs_checked}\n"
+            f"Паков найдено: {result.packs_found}\n"
+            f"Батчей: {result.pages_scanned}\n"
+            f"Курсор: {result.cursor_before} -> {result.cursor_after}\n"
+            f"Сетевые ошибки: {result.network_errors}\n"
+            f"Ошибки парсера: {result.parser_errors}\n"
+            f"Блокировка (403/429): {'да' if result.blocked else 'нет'}\n"
+            f"Добавлено по уровням: {' | '.join(levels)}"
+        )
+
+    async def _send_parser_report(self, title: str, result) -> None:
+        report_user_id = self.settings.parser_report_user_id
+        if report_user_id is None:
+            return
+        try:
+            await self.bot.send_message(
+                chat_id=report_user_id,
+                text=self._format_parser_report(title, result),
+            )
+        except Exception:
+            logger.exception("Failed to send parser report to chat_id=%s", report_user_id)
+
     async def _send_question_to_chat(self, chat_id: int, question) -> None:
         text = self._format_question(question)
         if question.razdatka_pic_url:
@@ -116,7 +145,8 @@ class BotApp:
 
         async def _task() -> None:
             try:
-                await self.game.pool.replenish_to_target()
+                result = await self.game.pool.replenish_to_target()
+                await self._send_parser_report("Отчет парсера (по дефициту чата)", result)
                 async with self.chat_locks[chat_id]:
                     status, question = self.game.resume_after_replenish(chat_id)
                     if status == "ok" and question is not None:
@@ -138,6 +168,10 @@ class BotApp:
                     logger.exception("Failed to send replenish error message for chat_id=%s", chat_id)
 
         self.replenish_tasks[chat_id] = asyncio.create_task(_task())
+
+    async def run_startup_parser_batch(self) -> None:
+        result = await self.game.pool.run_startup_batch()
+        await self._send_parser_report("Отчет парсера (стартовый батч)", result)
 
     async def cmd_start(self, message: Message) -> None:
         async def _run() -> None:

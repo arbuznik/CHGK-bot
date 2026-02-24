@@ -75,6 +75,7 @@ async def async_main() -> None:
     app = BotApp(settings, game)
 
     if settings.bot_mode == "polling":
+        asyncio.create_task(app.run_startup_parser_batch())
         await app.run_polling()
         return
 
@@ -110,6 +111,7 @@ async def async_main() -> None:
             secret_token=settings.webhook_secret_token or None,
             drop_pending_updates=True,
         )
+        asyncio.create_task(app.run_startup_parser_batch())
         logger.info("Webhook set: %s", webhook_url)
 
     async def on_shutdown(_: web.Application) -> None:

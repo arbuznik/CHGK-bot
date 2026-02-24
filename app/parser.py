@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 import logging
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 
 import requests
@@ -12,7 +12,7 @@ from sqlalchemy.orm import Session
 
 from app.config import Settings
 from app.difficulty import difficulty_bucket
-from app.models import Pack, Question
+from app.models import Pack, ParserState, Question
 
 logger = logging.getLogger(__name__)
 
@@ -24,6 +24,16 @@ class ReplenishResult:
     added_questions: int
     ready_count: int
     pages_scanned: int
+    packs_checked: int = 0
+    packs_found: int = 0
+    network_errors: int = 0
+    parser_errors: int = 0
+    blocked: bool = False
+    batch_start_pack_id: int | None = None
+    batch_end_pack_id: int | None = None
+    cursor_before: int | None = None
+    cursor_after: int | None = None
+    questions_added_by_level: dict[int, int] = field(default_factory=dict)
 
 
 class GotQuestionsParser:
@@ -45,31 +55,6 @@ class GotQuestionsParser:
             except json.JSONDecodeError:
                 continue
         return "".join(parts)
-
-    def _extract_json_after_marker(self, payload: str, marker: str):
-        idx = payload.find(marker)
-        if idx < 0:
-            return None
-        start = idx + len(marker)
-        return json.JSONDecoder().raw_decode(payload[start:])[0]
-
-    def fetch_pack_ids(self, page: int) -> list[int]:
-        html = self._fetch_text(f"https://gotquestions.online/?page={page}")
-        payload = self._decode_next_payload(html)
-        idx = payload.find('"packs":[{')
-        if idx < 0:
-            return []
-        packs = json.JSONDecoder().raw_decode(payload[idx + len('"packs":'):])[0]
-        if not packs:
-            return []
-        if isinstance(packs, dict):
-            packs = [packs]
-        out: list[int] = []
-        for pack in packs:
-            pid = pack.get("id")
-            if isinstance(pid, int):
-                out.append(pid)
-        return out
 
     def fetch_pack(self, pack_id: int) -> dict | None:
         html = self._fetch_text(f"https://gotquestions.online/pack/{pack_id}")
@@ -148,6 +133,7 @@ class GotQuestionsParser:
         q: dict,
         target_per_level: int,
         ready_by_category: dict[int, int],
+        added_by_level: dict[int, int],
     ) -> bool:
         question_id = int(q["id"])
         existing = db.get(Question, question_id)
@@ -157,7 +143,6 @@ class GotQuestionsParser:
         razdatka_text = str(q.get("razdatkaText") or "")
 
         if existing is not None:
-            # Backfill distributive materials for already parsed questions.
             changed = False
             if not existing.razdatka_pic_url and razdatka_pic:
                 existing.razdatka_pic_url = razdatka_pic
@@ -209,12 +194,11 @@ class GotQuestionsParser:
         )
         db.add(row)
         ready_by_category[bucket] = ready_by_category.get(bucket, 0) + 1
+        added_by_level[bucket] = added_by_level.get(bucket, 0) + 1
         return True
 
     def count_ready_by_category(self, db: Session) -> dict[int, int]:
-        rows = db.execute(
-            select(Question.pack_complexity_primary, Question.pack_complexity_secondary)
-        ).all()
+        rows = db.execute(select(Question.pack_complexity_primary, Question.pack_complexity_secondary)).all()
         out = {level: 0 for level in range(1, 11)}
         for c1, c2 in rows:
             bucket = difficulty_bucket(c1, c2)
@@ -223,63 +207,107 @@ class GotQuestionsParser:
             out[bucket] = out.get(bucket, 0) + 1
         return out
 
-    def replenish_to_target(self, db: Session, target_per_level: int) -> ReplenishResult:
+    def _get_or_create_state(self, db: Session) -> ParserState:
+        state = db.get(ParserState, "main")
+        if state is None:
+            state = ParserState(
+                key="main",
+                cursor_pack_id=self.settings.parser_cursor_start_pack_id,
+                updated_at=datetime.utcnow(),
+            )
+            db.add(state)
+            db.flush()
+        return state
+
+    def replenish_cursor_batches(
+        self,
+        db: Session,
+        target_per_level: int,
+        batch_size: int,
+        max_batches: int,
+    ) -> ReplenishResult:
         ready_by_category = self.count_ready_by_category(db)
         needed_categories = {level for level in range(1, 11) if ready_by_category.get(level, 0) < target_per_level}
         if not needed_categories:
-            return ReplenishResult(
-                added_questions=0,
-                ready_count=sum(ready_by_category.values()),
-                pages_scanned=0,
-            )
+            return ReplenishResult(added_questions=0, ready_count=sum(ready_by_category.values()), pages_scanned=0)
 
-        added = 0
-        pages = 0
-        for page in range(1, self.settings.parser_max_pages + 1):
-            pages = page
-            try:
-                pack_ids = self.fetch_pack_ids(page)
-            except Exception:
-                logger.exception("Failed to fetch packs page=%s", page)
-                continue
+        state = self._get_or_create_state(db)
+        cursor = state.cursor_pack_id or 0
+        result = ReplenishResult(
+            added_questions=0,
+            ready_count=sum(ready_by_category.values()),
+            pages_scanned=0,
+            cursor_before=cursor,
+            cursor_after=cursor,
+            questions_added_by_level={level: 0 for level in range(1, 11)},
+        )
 
-            if not pack_ids:
+        if cursor <= 0:
+            return result
+
+        current = cursor
+        batches_done = 0
+        while batches_done < max_batches and current > 0:
+            if all(ready_by_category.get(level, 0) >= target_per_level for level in needed_categories):
                 break
 
-            for pack_id in pack_ids:
-                if all(ready_by_category.get(level, 0) >= target_per_level for level in needed_categories):
-                    db.commit()
-                    return ReplenishResult(
-                        added_questions=added,
-                        ready_count=sum(ready_by_category.values()),
-                        pages_scanned=pages,
-                    )
+            batch_start = current
+            batch_end = max(current - batch_size + 1, 1)
+            result.batch_start_pack_id = batch_start if result.batch_start_pack_id is None else result.batch_start_pack_id
+            result.batch_end_pack_id = batch_end
 
+            for pack_id in range(batch_start, batch_end - 1, -1):
+                result.packs_checked += 1
                 try:
                     pack = self.fetch_pack(pack_id)
+                except requests.HTTPError as exc:
+                    result.network_errors += 1
+                    status = getattr(getattr(exc, "response", None), "status_code", None)
+                    if status in {403, 429}:
+                        result.blocked = True
+                    continue
+                except requests.RequestException:
+                    result.network_errors += 1
+                    continue
                 except Exception:
-                    logger.exception("Failed to fetch pack id=%s", pack_id)
+                    result.parser_errors += 1
+                    logger.exception("Unexpected parser error on pack id=%s", pack_id)
                     continue
 
                 if not pack:
                     continue
 
-                self._upsert_pack(db, pack)
+                result.packs_found += 1
+                try:
+                    self._upsert_pack(db, pack)
+                    tours = pack.get("tours") if isinstance(pack.get("tours"), list) else []
+                    for tour in tours:
+                        questions = tour.get("questions") if isinstance(tour, dict) and isinstance(tour.get("questions"), list) else []
+                        for q in questions:
+                            try:
+                                if self._upsert_question(
+                                    db,
+                                    pack,
+                                    q,
+                                    target_per_level,
+                                    ready_by_category,
+                                    result.questions_added_by_level,
+                                ):
+                                    result.added_questions += 1
+                            except Exception:
+                                result.parser_errors += 1
+                                logger.exception("Failed to upsert question in pack id=%s", pack_id)
+                except Exception:
+                    result.parser_errors += 1
+                    logger.exception("Failed to process pack id=%s", pack_id)
 
-                tours = pack.get("tours") if isinstance(pack.get("tours"), list) else []
-                for tour in tours:
-                    questions = tour.get("questions") if isinstance(tour, dict) and isinstance(tour.get("questions"), list) else []
-                    for q in questions:
-                        try:
-                            if self._upsert_question(db, pack, q, target_per_level, ready_by_category):
-                                added += 1
-                        except Exception:
-                            logger.exception("Failed to upsert question in pack id=%s", pack_id)
+            current = batch_end - 1
+            state.cursor_pack_id = current
+            state.updated_at = datetime.utcnow()
+            db.commit()
+            batches_done += 1
 
-                db.commit()
-
-        return ReplenishResult(
-            added_questions=added,
-            ready_count=sum(ready_by_category.values()),
-            pages_scanned=pages,
-        )
+        result.cursor_after = state.cursor_pack_id
+        result.ready_count = sum(ready_by_category.values())
+        result.pages_scanned = batches_done
+        return result
