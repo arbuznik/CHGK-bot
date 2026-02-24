@@ -414,7 +414,7 @@ class BotApp:
 
     async def setup_commands_menu(self) -> None:
         commands = [
-            BotCommand(command="start", description="Старт: /start [0-10] [лайки] [%], 0=рандом, дефолт: /start"),
+            BotCommand(command="start", description="Старт: /start [сложн] [мин лайков] [>= % взятия], дефолт: /start: 0=рандом/1/20%"),
             BotCommand(command="next", description="Показать ответ и следующий вопрос"),
             BotCommand(command="stop", description="Остановить игру и показать статистику"),
         ]
