@@ -102,7 +102,14 @@ class GameService:
     def get_or_create_session(self, db: Session, chat_id: int) -> ChatSession:
         row = db.execute(select(ChatSession).where(ChatSession.chat_id == chat_id)).scalar_one_or_none()
         if row is None:
-            row = ChatSession(chat_id=chat_id, state="IDLE", selected_difficulty=None, updated_at=datetime.utcnow())
+            row = ChatSession(
+                chat_id=chat_id,
+                state="IDLE",
+                selected_difficulty=None,
+                selected_min_likes=1,
+                selected_min_take_percent=20.0,
+                updated_at=datetime.utcnow(),
+            )
             db.add(row)
             db.flush()
         return row
@@ -120,7 +127,13 @@ class GameService:
             else_=Question.pack_complexity_secondary,
         )
 
-    def _next_question(self, db: Session, chat_id: int, selected_difficulty: int | None) -> Question | None:
+    def _build_questions_query(
+        self,
+        chat_id: int,
+        selected_difficulty: int | None,
+        selected_min_likes: int,
+        selected_min_take_percent: float,
+    ):
         used_subquery = (
             select(ChatQuestionUsage.id)
             .where(
@@ -131,6 +144,9 @@ class GameService:
         )
         query = select(Question).where(
             ~exists(used_subquery),
+            Question.likes >= selected_min_likes,
+            Question.take_percent.is_not(None),
+            Question.take_percent >= selected_min_take_percent,
         )
 
         if selected_difficulty is not None:
@@ -142,9 +158,60 @@ class GameService:
             else:
                 query = query.where(and_(score.is_not(None), score >= lower, score < upper))
 
+        return query
+
+    def _next_question(
+        self,
+        db: Session,
+        chat_id: int,
+        selected_difficulty: int | None,
+        selected_min_likes: int,
+        selected_min_take_percent: float,
+    ) -> Question | None:
+        query = self._build_questions_query(
+            chat_id=chat_id,
+            selected_difficulty=selected_difficulty,
+            selected_min_likes=selected_min_likes,
+            selected_min_take_percent=selected_min_take_percent,
+        )
         return db.execute(query.order_by(func.random()).limit(1)).scalar_one_or_none()
 
-    async def start_game(self, chat_id: int, selected_difficulty: int | None) -> tuple[str, Question | None]:
+    def count_selection(
+        self,
+        chat_id: int,
+        selected_difficulty: int | None,
+        selected_min_likes: int,
+        selected_min_take_percent: float,
+    ) -> tuple[int, int]:
+        with self.session_factory() as db:
+            used_subquery = (
+                select(ChatQuestionUsage.id)
+                .where(
+                    ChatQuestionUsage.chat_id == chat_id,
+                    ChatQuestionUsage.question_id == Question.question_id,
+                )
+                .limit(1)
+            )
+            total = db.execute(select(func.count()).select_from(Question).where(~exists(used_subquery))).scalar_one()
+            filtered = db.execute(
+                select(func.count()).select_from(
+                    self._build_questions_query(
+                        chat_id=chat_id,
+                        selected_difficulty=selected_difficulty,
+                        selected_min_likes=selected_min_likes,
+                        selected_min_take_percent=selected_min_take_percent,
+                    ).subquery()
+                )
+            ).scalar_one()
+            return int(filtered or 0), int(total or 0)
+
+    async def start_game(
+        self,
+        chat_id: int,
+        selected_difficulty: int | None,
+        selected_min_likes: int,
+        selected_min_take_percent: float,
+    ) -> tuple[str, Question | None]:
         with self.session_factory() as db:
             session = self.get_or_create_session(db, chat_id)
             if session.state == "WAITING_REPLENISH":
@@ -154,6 +221,8 @@ class GameService:
 
             session.state = "QUESTION_ACTIVE"
             session.selected_difficulty = selected_difficulty
+            session.selected_min_likes = selected_min_likes
+            session.selected_min_take_percent = selected_min_take_percent
             session.current_question_message_id = None
             session.session_asked_count = 0
             session.session_taken_count = 0
@@ -161,7 +230,13 @@ class GameService:
             session.session_complexity_secondary_sum = 0.0
             session.session_complexity_count = 0
 
-            question = self._next_question(db, chat_id, selected_difficulty)
+            question = self._next_question(
+                db,
+                chat_id,
+                selected_difficulty,
+                selected_min_likes,
+                selected_min_take_percent,
+            )
             if question is None:
                 session.state = "WAITING_REPLENISH"
                 session.current_question_id = None
@@ -237,7 +312,13 @@ class GameService:
                     return "no_active", current, None
                 return "no_active", None
 
-            next_q = self._next_question(db, chat_id, session.selected_difficulty)
+            next_q = self._next_question(
+                db,
+                chat_id,
+                session.selected_difficulty,
+                int(session.selected_min_likes or 1),
+                float(session.selected_min_take_percent or 20.0),
+            )
             if next_q is None:
                 session.state = "WAITING_REPLENISH"
                 session.current_question_id = None
@@ -263,7 +344,13 @@ class GameService:
             if session.state != "WAITING_REPLENISH":
                 return "not_waiting", None
 
-            next_q = self._next_question(db, chat_id, session.selected_difficulty)
+            next_q = self._next_question(
+                db,
+                chat_id,
+                session.selected_difficulty,
+                int(session.selected_min_likes or 1),
+                float(session.selected_min_take_percent or 20.0),
+            )
             if next_q is None:
                 return "still_empty", None
 
@@ -317,6 +404,8 @@ class GameService:
             )
             session.state = "IDLE"
             session.selected_difficulty = None
+            session.selected_min_likes = 1
+            session.selected_min_take_percent = 20.0
             session.current_question_id = None
             session.current_question_message_id = None
             session.scheduled_next_at = None

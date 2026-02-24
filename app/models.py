@@ -59,6 +59,8 @@ class ChatSession(Base):
     current_question_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     current_question_message_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     selected_difficulty: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    selected_min_likes: Mapped[int] = mapped_column(Integer, default=1)
+    selected_min_take_percent: Mapped[float] = mapped_column(Float, default=20.0)
     scheduled_next_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
     lock_version: Mapped[int] = mapped_column(Integer, default=0)
     session_asked_count: Mapped[int] = mapped_column(Integer, default=0)

@@ -186,11 +186,27 @@ class BotApp:
     async def cmd_start(self, message: Message) -> None:
         async def _run() -> None:
             try:
-                selected_difficulty = self._parse_start_difficulty(message.text or "")
-                if selected_difficulty == -1:
-                    await message.answer("Использование: /start [сложность 1-10]. Пример: /start 6")
+                parsed = self._parse_start_params(message.text or "")
+                if parsed is None:
+                    await message.answer(
+                        "Использование: /start [сложность 1-10] [мин лайков >=1] [мин % взятий >=0]. "
+                        "Пример: /start 6 3 20. По умолчанию: /start = лайки>=1, %взятий>=20."
+                    )
                     return
-                status, q = await self.game.start_game(message.chat.id, None if selected_difficulty == 0 else selected_difficulty)
+                selected_difficulty, min_likes, min_take_percent = parsed
+                selected_difficulty_value = None if selected_difficulty == 0 else selected_difficulty
+                filtered_count, total_count = self.game.count_selection(
+                    chat_id=message.chat.id,
+                    selected_difficulty=selected_difficulty_value,
+                    selected_min_likes=min_likes,
+                    selected_min_take_percent=min_take_percent,
+                )
+                status, q = await self.game.start_game(
+                    message.chat.id,
+                    selected_difficulty_value,
+                    min_likes,
+                    min_take_percent,
+                )
                 if status == "waiting_replenish":
                     await message.answer("Парсинг новых вопросов уже запущен. Подождите немного.")
                     await self._trigger_replenish_for_chat(message.chat.id)
@@ -198,12 +214,21 @@ class BotApp:
                 if status == "already_running":
                     await message.answer("Игра уже запущена. Используй /next или /stop.")
                     return
+                diff_text = "рандом" if selected_difficulty_value is None else str(selected_difficulty_value)
+                await message.answer(
+                    "Параметры игры:\n"
+                    f"- Сложность: {diff_text}\n"
+                    f"- Мин. лайков: {min_likes}\n"
+                    f"- Мин. % взятий: {min_take_percent:.1f}%\n"
+                    f"- В выборке: {filtered_count} из {total_count}"
+                )
                 if status == "need_replenish" or q is None:
                     await message.answer(
                         "Вопросы для этого чата закончились. Запускаю парсинг новых, подождите немного."
                     )
                     await self._trigger_replenish_for_chat(message.chat.id)
                     return
+                await asyncio.sleep(3)
                 await self._send_question_to_chat(message.chat.id, q)
             except Exception:
                 logger.exception("cmd_start failed for chat_id=%s", message.chat.id)
@@ -211,19 +236,43 @@ class BotApp:
 
         await self._with_chat_lock(message.chat.id, _run)
 
-    def _parse_start_difficulty(self, text: str) -> int:
+    def _parse_start_params(self, text: str) -> tuple[int, int, float] | None:
         parts = text.strip().split()
         if len(parts) == 1:
-            return 0
-        if len(parts) != 2:
-            return -1
-        raw = parts[1].strip()
-        if not raw.isdigit():
-            return -1
-        value = int(raw)
-        if value < 1 or value > 10:
-            return -1
-        return value
+            return 0, 1, 20.0
+        if len(parts) > 4:
+            return None
+
+        selected_difficulty = 0
+        min_likes = 1
+        min_take_percent = 20.0
+
+        if len(parts) >= 2:
+            raw_diff = parts[1].strip()
+            if not raw_diff.isdigit():
+                return None
+            selected_difficulty = int(raw_diff)
+            if selected_difficulty < 1 or selected_difficulty > 10:
+                return None
+
+        if len(parts) >= 3:
+            raw_likes = parts[2].strip()
+            if not raw_likes.isdigit():
+                return None
+            min_likes = int(raw_likes)
+            if min_likes < 1:
+                return None
+
+        if len(parts) == 4:
+            raw_take = parts[3].strip().replace(",", ".")
+            try:
+                min_take_percent = float(raw_take)
+            except ValueError:
+                return None
+            if min_take_percent < 0 or min_take_percent > 100:
+                return None
+
+        return selected_difficulty, min_likes, min_take_percent
 
     async def _schedule_next_send_for_chat(self, chat_id: int) -> None:
         self._cancel_scheduled(chat_id)
@@ -365,7 +414,7 @@ class BotApp:
 
     async def setup_commands_menu(self) -> None:
         commands = [
-            BotCommand(command="start", description="Старт игры: /start [сложность 1-10]"),
+            BotCommand(command="start", description="Старт: /start [сложность] [лайки] [%взятий], дефолт 1/20"),
             BotCommand(command="next", description="Показать ответ и следующий вопрос"),
             BotCommand(command="stop", description="Остановить игру и показать статистику"),
         ]

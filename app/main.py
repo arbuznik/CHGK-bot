@@ -36,6 +36,24 @@ def init_db(session_factory) -> None:
                     "ALTER TABLE chat_sessions "
                     "ADD COLUMN selected_difficulty INTEGER NULL"
                 )
+            min_likes_col = conn.exec_driver_sql(
+                "SELECT 1 FROM information_schema.columns "
+                "WHERE table_name='chat_sessions' AND column_name='selected_min_likes'"
+            ).scalar_one_or_none()
+            if min_likes_col is None:
+                conn.exec_driver_sql(
+                    "ALTER TABLE chat_sessions "
+                    "ADD COLUMN selected_min_likes INTEGER NOT NULL DEFAULT 1"
+                )
+            min_take_col = conn.exec_driver_sql(
+                "SELECT 1 FROM information_schema.columns "
+                "WHERE table_name='chat_sessions' AND column_name='selected_min_take_percent'"
+            ).scalar_one_or_none()
+            if min_take_col is None:
+                conn.exec_driver_sql(
+                    "ALTER TABLE chat_sessions "
+                    "ADD COLUMN selected_min_take_percent DOUBLE PRECISION NOT NULL DEFAULT 20.0"
+                )
             q_col_exists = conn.exec_driver_sql(
                 "SELECT 1 FROM information_schema.columns "
                 "WHERE table_name='questions' AND column_name='razdatka_text'"
@@ -52,6 +70,18 @@ def init_db(session_factory) -> None:
                 conn.exec_driver_sql(
                     "ALTER TABLE chat_sessions "
                     "ADD COLUMN selected_difficulty INTEGER"
+                )
+            has_min_likes = any(r[1] == "selected_min_likes" for r in rows)
+            if not has_min_likes:
+                conn.exec_driver_sql(
+                    "ALTER TABLE chat_sessions "
+                    "ADD COLUMN selected_min_likes INTEGER NOT NULL DEFAULT 1"
+                )
+            has_min_take = any(r[1] == "selected_min_take_percent" for r in rows)
+            if not has_min_take:
+                conn.exec_driver_sql(
+                    "ALTER TABLE chat_sessions "
+                    "ADD COLUMN selected_min_take_percent REAL NOT NULL DEFAULT 20.0"
                 )
             q_rows = conn.exec_driver_sql("PRAGMA table_info(questions)").fetchall()
             has_q_col = any(r[1] == "razdatka_text" for r in q_rows)
