@@ -33,6 +33,9 @@ class PoolService:
         self.parser = GotQuestionsParser(settings)
         self._replenish_lock = asyncio.Lock()
 
+    def is_running(self) -> bool:
+        return self._replenish_lock.locked()
+
     async def replenish_to_target(self) -> ReplenishResult:
         if self._replenish_lock.locked():
             async with self._replenish_lock:
@@ -46,6 +49,13 @@ class PoolService:
                 return ReplenishResult(added_questions=0, ready_count=0, pages_scanned=0)
         async with self._replenish_lock:
             return await asyncio.to_thread(self._startup_batch_sync)
+
+    async def run_manual_batch(self, cursor_start: int | None = None) -> ReplenishResult:
+        if self._replenish_lock.locked():
+            async with self._replenish_lock:
+                return ReplenishResult(added_questions=0, ready_count=0, pages_scanned=0)
+        async with self._replenish_lock:
+            return await asyncio.to_thread(lambda: self._manual_batch_sync(cursor_start))
 
     def _replenish_sync(self) -> ReplenishResult:
         with self.session_factory() as db:
@@ -81,6 +91,29 @@ class PoolService:
                 result.packs_checked,
                 result.cursor_before,
                 result.cursor_after,
+            )
+            return result
+
+    def _manual_batch_sync(self, cursor_start: int | None) -> ReplenishResult:
+        with self.session_factory() as db:
+            if cursor_start is not None:
+                self.parser.set_cursor(db, cursor_start)
+            result = self.parser.replenish_cursor_batches(
+                db,
+                target_per_level=self.settings.replenish_target_per_level,
+                batch_size=self.settings.parser_batch_size,
+                max_batches=1,
+            )
+            logger.info(
+                "Manual parser batch: added=%s checked=%s found=%s cursor=%s->%s retries=%s net_errors=%s parser_errors=%s",
+                result.added_questions,
+                result.packs_checked,
+                result.packs_found,
+                result.cursor_before,
+                result.cursor_after,
+                result.network_retries,
+                result.network_errors,
+                result.parser_errors,
             )
             return result
 

@@ -98,16 +98,32 @@ class BotApp:
         levels = []
         for level in range(1, 11):
             levels.append(f"{level}:{result.questions_added_by_level.get(level, 0)}")
+        excluded_total = (
+            result.questions_existing
+            + result.questions_filtered_likes
+            + result.questions_filtered_bucket_missing
+            + result.questions_filtered_target_full
+        )
         return (
             f"{title}\n"
+            f"Время: {result.duration_sec:.2f} сек\n"
             f"Добавлено вопросов: {result.added_questions}\n"
             f"Паков проверено: {result.packs_checked}\n"
             f"Паков найдено: {result.packs_found}\n"
+            f"Паков не найдено (404/пусто): {result.packs_not_found}\n"
+            f"Паков с HTTP-ошибками: {result.packs_failed_http}\n"
             f"Батчей: {result.pages_scanned}\n"
             f"Курсор: {result.cursor_before} -> {result.cursor_after}\n"
             f"Сетевые ошибки: {result.network_errors}\n"
+            f"Сетевые ретраи: {result.network_retries}\n"
             f"Ошибки парсера: {result.parser_errors}\n"
             f"Блокировка (403/429): {'да' if result.blocked else 'нет'}\n"
+            f"Вопросов найдено всего: {result.questions_seen_total}\n"
+            f"Вопросов отсечено всего: {excluded_total}\n"
+            f"Отсечено как уже существующие: {result.questions_existing}\n"
+            f"Отсечено по фильтру лайков/рейтинга: {result.questions_filtered_likes}\n"
+            f"Отсечено без валидной сложности: {result.questions_filtered_bucket_missing}\n"
+            f"Отсечено т.к. уровень уже заполнен: {result.questions_filtered_target_full}\n"
             f"Добавлено по уровням: {' | '.join(levels)}"
         )
 
@@ -301,6 +317,9 @@ class BotApp:
         if cmd_name == "/stop":
             await self.cmd_stop(message)
             return
+        if cmd_name == "/parser_once":
+            await self.cmd_parser_once(message)
+            return
 
     async def on_text_message(self, message: Message) -> None:
         if message.text is None or message.text.startswith("/"):
@@ -358,3 +377,35 @@ class BotApp:
         ]
         await self.bot.set_my_commands(commands, scope=BotCommandScopeAllPrivateChats())
         await self.bot.set_my_commands(commands, scope=BotCommandScopeAllGroupChats())
+
+    async def cmd_parser_once(self, message: Message) -> None:
+        admin_id = self.settings.parser_report_user_id
+        caller_id = message.from_user.id if message.from_user is not None else None
+        if admin_id is None or caller_id != admin_id:
+            await message.answer("Недостаточно прав для запуска парсера.")
+            return
+        if self.game.pool.is_running():
+            await message.answer("Парсер уже выполняется. Подождите завершения текущего запуска.")
+            return
+
+        cursor_start: int | None = None
+        parts = (message.text or "").strip().split()
+        if len(parts) > 1:
+            raw = parts[1].strip()
+            if not raw.isdigit():
+                await message.answer("Использование: /parser_once [cursor_pack_id], пример: /parser_once 6300")
+                return
+            cursor_start = int(raw)
+
+        if cursor_start is not None:
+            await message.answer(f"Запускаю разовый батч парсера от курсора {cursor_start}...")
+        else:
+            await message.answer("Запускаю разовый батч парсера (500 pack id)...")
+        try:
+            result = await self.game.pool.run_manual_batch(cursor_start=cursor_start)
+            report = self._format_parser_report("Отчет парсера (ручной запуск)", result)
+            await message.answer(report)
+            await self._send_parser_report("Отчет парсера (ручной запуск)", result)
+        except Exception:
+            logger.exception("Manual parser run failed")
+            await message.answer("Ошибка при ручном запуске парсера.")

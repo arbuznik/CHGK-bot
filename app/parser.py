@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import logging
 import re
+import time
 from dataclasses import dataclass, field
 from datetime import datetime
 
@@ -26,13 +27,22 @@ class ReplenishResult:
     pages_scanned: int
     packs_checked: int = 0
     packs_found: int = 0
+    packs_not_found: int = 0
+    packs_failed_http: int = 0
     network_errors: int = 0
+    network_retries: int = 0
     parser_errors: int = 0
     blocked: bool = False
+    duration_sec: float = 0.0
     batch_start_pack_id: int | None = None
     batch_end_pack_id: int | None = None
     cursor_before: int | None = None
     cursor_after: int | None = None
+    questions_seen_total: int = 0
+    questions_existing: int = 0
+    questions_filtered_likes: int = 0
+    questions_filtered_bucket_missing: int = 0
+    questions_filtered_target_full: int = 0
     questions_added_by_level: dict[int, int] = field(default_factory=dict)
 
 
@@ -66,6 +76,31 @@ class GotQuestionsParser:
         if not isinstance(pack, dict):
             return None
         return pack
+
+    def _fetch_pack_with_retry(self, pack_id: int, result: ReplenishResult, max_retries: int = 2) -> tuple[dict | None, str]:
+        attempt = 0
+        while True:
+            try:
+                return self.fetch_pack(pack_id), "ok"
+            except requests.HTTPError as exc:
+                status = getattr(getattr(exc, "response", None), "status_code", None)
+                if status == 404:
+                    return None, "not_found"
+                if status in {403, 429}:
+                    result.blocked = True
+                if status is not None and status < 500 and status not in {403, 429}:
+                    return None, f"http_{status}"
+                if attempt >= max_retries:
+                    return None, f"http_{status or 'unknown'}"
+                result.network_retries += 1
+                attempt += 1
+                time.sleep(0.25 * attempt)
+            except requests.RequestException:
+                if attempt >= max_retries:
+                    return None, "network_error"
+                result.network_retries += 1
+                attempt += 1
+                time.sleep(0.25 * attempt)
 
     def _question_passes_filter(self, likes: int, dislikes: int | None) -> bool:
         required_likes = max(self.settings.min_likes, 10)
@@ -133,7 +168,7 @@ class GotQuestionsParser:
         q: dict,
         target_per_level: int,
         ready_by_category: dict[int, int],
-        added_by_level: dict[int, int],
+        result: ReplenishResult,
     ) -> bool:
         question_id = int(q["id"])
         existing = db.get(Question, question_id)
@@ -152,10 +187,12 @@ class GotQuestionsParser:
                 changed = True
             if changed:
                 existing.updated_at = datetime.utcnow()
+            result.questions_existing += 1
             return False
 
         dislikes = None
         if not self._question_passes_filter(likes, dislikes):
+            result.questions_filtered_likes += 1
             return False
 
         truedl = pack.get("trueDl") if isinstance(pack.get("trueDl"), list) else []
@@ -163,8 +200,10 @@ class GotQuestionsParser:
         c2 = truedl[1] if len(truedl) > 1 and isinstance(truedl[1], (int, float)) else None
         bucket = difficulty_bucket(c1, c2)
         if bucket is None:
+            result.questions_filtered_bucket_missing += 1
             return False
         if ready_by_category.get(bucket, 0) >= target_per_level:
+            result.questions_filtered_target_full += 1
             return False
 
         take_num, take_den, take_percent = self._calc_take(q)
@@ -194,7 +233,7 @@ class GotQuestionsParser:
         )
         db.add(row)
         ready_by_category[bucket] = ready_by_category.get(bucket, 0) + 1
-        added_by_level[bucket] = added_by_level.get(bucket, 0) + 1
+        result.questions_added_by_level[bucket] = result.questions_added_by_level.get(bucket, 0) + 1
         return True
 
     def count_ready_by_category(self, db: Session) -> dict[int, int]:
@@ -219,6 +258,12 @@ class GotQuestionsParser:
             db.flush()
         return state
 
+    def set_cursor(self, db: Session, cursor_pack_id: int) -> None:
+        state = self._get_or_create_state(db)
+        state.cursor_pack_id = cursor_pack_id
+        state.updated_at = datetime.utcnow()
+        db.commit()
+
     def replenish_cursor_batches(
         self,
         db: Session,
@@ -226,6 +271,7 @@ class GotQuestionsParser:
         batch_size: int,
         max_batches: int,
     ) -> ReplenishResult:
+        started = time.monotonic()
         ready_by_category = self.count_ready_by_category(db)
         needed_categories = {level for level in range(1, 11) if ready_by_category.get(level, 0) < target_per_level}
         if not needed_categories:
@@ -243,6 +289,7 @@ class GotQuestionsParser:
         )
 
         if cursor <= 0:
+            result.duration_sec = round(time.monotonic() - started, 2)
             return result
 
         current = cursor
@@ -253,28 +300,32 @@ class GotQuestionsParser:
 
             batch_start = current
             batch_end = max(current - batch_size + 1, 1)
-            result.batch_start_pack_id = batch_start if result.batch_start_pack_id is None else result.batch_start_pack_id
+            if result.batch_start_pack_id is None:
+                result.batch_start_pack_id = batch_start
             result.batch_end_pack_id = batch_end
 
             for pack_id in range(batch_start, batch_end - 1, -1):
                 result.packs_checked += 1
                 try:
-                    pack = self.fetch_pack(pack_id)
-                except requests.HTTPError as exc:
-                    result.network_errors += 1
-                    status = getattr(getattr(exc, "response", None), "status_code", None)
-                    if status in {403, 429}:
-                        result.blocked = True
-                    continue
-                except requests.RequestException:
-                    result.network_errors += 1
-                    continue
+                    pack, fetch_status = self._fetch_pack_with_retry(pack_id, result)
                 except Exception:
                     result.parser_errors += 1
-                    logger.exception("Unexpected parser error on pack id=%s", pack_id)
+                    logger.exception("Unexpected fetch wrapper error on pack id=%s", pack_id)
+                    continue
+
+                if fetch_status == "not_found":
+                    result.packs_not_found += 1
+                    continue
+                if fetch_status.startswith("http_"):
+                    result.packs_failed_http += 1
+                    result.network_errors += 1
+                    continue
+                if fetch_status == "network_error":
+                    result.network_errors += 1
                     continue
 
                 if not pack:
+                    result.packs_not_found += 1
                     continue
 
                 result.packs_found += 1
@@ -284,15 +335,9 @@ class GotQuestionsParser:
                     for tour in tours:
                         questions = tour.get("questions") if isinstance(tour, dict) and isinstance(tour.get("questions"), list) else []
                         for q in questions:
+                            result.questions_seen_total += 1
                             try:
-                                if self._upsert_question(
-                                    db,
-                                    pack,
-                                    q,
-                                    target_per_level,
-                                    ready_by_category,
-                                    result.questions_added_by_level,
-                                ):
+                                if self._upsert_question(db, pack, q, target_per_level, ready_by_category, result):
                                     result.added_questions += 1
                             except Exception:
                                 result.parser_errors += 1
@@ -310,4 +355,5 @@ class GotQuestionsParser:
         result.cursor_after = state.cursor_pack_id
         result.ready_count = sum(ready_by_category.values())
         result.pages_scanned = batches_done
+        result.duration_sec = round(time.monotonic() - started, 2)
         return result
