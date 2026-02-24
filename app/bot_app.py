@@ -222,6 +222,12 @@ class BotApp:
                     f"- Мин. % взятий: {min_take_percent:.1f}%\n"
                     f"- В выборке: {filtered_count} из {total_count}"
                 )
+                if filtered_count == 0:
+                    await message.answer(
+                        "По заданным фильтрам вопросов нет (выборка 0). "
+                        "Ослабь параметры и запусти /start снова."
+                    )
+                    return
                 if status == "need_replenish" or q is None:
                     await message.answer(
                         "Вопросы для этого чата закончились. Запускаю парсинг новых, подождите немного."

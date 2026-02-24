@@ -193,15 +193,14 @@ class GameService:
                 .limit(1)
             )
             total = db.execute(select(func.count()).select_from(Question).where(~exists(used_subquery))).scalar_one()
+            filtered_query = self._build_questions_query(
+                chat_id=chat_id,
+                selected_difficulty=selected_difficulty,
+                selected_min_likes=selected_min_likes,
+                selected_min_take_percent=selected_min_take_percent,
+            )
             filtered = db.execute(
-                select(func.count()).select_from(
-                    self._build_questions_query(
-                        chat_id=chat_id,
-                        selected_difficulty=selected_difficulty,
-                        selected_min_likes=selected_min_likes,
-                        selected_min_take_percent=selected_min_take_percent,
-                    ).subquery()
-                )
+                filtered_query.with_only_columns(func.count()).order_by(None)
             ).scalar_one()
             return int(filtered or 0), int(total or 0)
 
