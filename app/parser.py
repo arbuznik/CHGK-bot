@@ -102,21 +102,23 @@ class GotQuestionsParser:
                 attempt += 1
                 time.sleep(0.25 * attempt)
 
-    def _question_passes_filter(self, likes: int, dislikes: int | None) -> bool:
-        required_likes = max(self.settings.min_likes, 10)
-        if likes < required_likes:
-            return False
-
-        policy = self.settings.zero_dislikes_policy
-        if dislikes is None or dislikes <= 0:
-            if policy == "exclude":
-                return False
-            if policy == "include_as_infinite_ratio":
-                return True
-            return likes >= required_likes
-
-        ratio = likes / dislikes
-        return ratio > self.settings.likes_dislikes_ratio_min
+    def _question_passes_filter(
+        self,
+        likes: int,
+        take_num: int | None,
+        take_den: int | None,
+        take_percent: float | None,
+    ) -> bool:
+        if likes >= 3:
+            return True
+        if (
+            take_den is not None
+            and take_den >= 10
+            and take_percent is not None
+            and 20.0 <= take_percent <= 90.0
+        ):
+            return True
+        return False
 
     def _calc_take(self, q: dict) -> tuple[int | None, int | None, float | None]:
         correct = q.get("correct_answers")
@@ -191,7 +193,8 @@ class GotQuestionsParser:
             return False
 
         dislikes = None
-        if not self._question_passes_filter(likes, dislikes):
+        take_num, take_den, take_percent = self._calc_take(q)
+        if not self._question_passes_filter(likes, take_num, take_den, take_percent):
             result.questions_filtered_likes += 1
             return False
 
@@ -205,8 +208,6 @@ class GotQuestionsParser:
         if ready_by_category.get(bucket, 0) >= target_per_level:
             result.questions_filtered_target_full += 1
             return False
-
-        take_num, take_den, take_percent = self._calc_take(q)
 
         row = Question(
             question_id=question_id,

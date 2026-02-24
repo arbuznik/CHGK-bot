@@ -50,12 +50,12 @@ class PoolService:
         async with self._replenish_lock:
             return await asyncio.to_thread(self._startup_batch_sync)
 
-    async def run_manual_batch(self, cursor_start: int | None = None) -> ReplenishResult:
+    async def run_manual_batch(self, cursor_start: int | None = None, max_batches: int = 1) -> ReplenishResult:
         if self._replenish_lock.locked():
             async with self._replenish_lock:
                 return ReplenishResult(added_questions=0, ready_count=0, pages_scanned=0)
         async with self._replenish_lock:
-            return await asyncio.to_thread(lambda: self._manual_batch_sync(cursor_start))
+            return await asyncio.to_thread(lambda: self._manual_batch_sync(cursor_start, max_batches))
 
     def _replenish_sync(self) -> ReplenishResult:
         with self.session_factory() as db:
@@ -94,7 +94,7 @@ class PoolService:
             )
             return result
 
-    def _manual_batch_sync(self, cursor_start: int | None) -> ReplenishResult:
+    def _manual_batch_sync(self, cursor_start: int | None, max_batches: int) -> ReplenishResult:
         with self.session_factory() as db:
             if cursor_start is not None:
                 self.parser.set_cursor(db, cursor_start)
@@ -102,7 +102,7 @@ class PoolService:
                 db,
                 target_per_level=self.settings.replenish_target_per_level,
                 batch_size=self.settings.parser_batch_size,
-                max_batches=1,
+                max_batches=max_batches,
             )
             logger.info(
                 "Manual parser batch: added=%s checked=%s found=%s cursor=%s->%s retries=%s net_errors=%s parser_errors=%s",
@@ -154,8 +154,19 @@ class GameService:
             )
             .limit(1)
         )
-        required_likes = max(self.settings.min_likes, 10)
-        query = select(Question).where(~exists(used_subquery), Question.likes >= required_likes)
+        query = select(Question).where(
+            ~exists(used_subquery),
+            (
+                (Question.likes >= 3)
+                | (
+                    Question.take_den.is_not(None)
+                    & (Question.take_den >= 10)
+                    & Question.take_percent.is_not(None)
+                    & (Question.take_percent >= 20.0)
+                    & (Question.take_percent <= 90.0)
+                )
+            ),
+        )
 
         if selected_difficulty is not None:
             score = self._difficulty_score_expr()

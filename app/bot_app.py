@@ -389,20 +389,27 @@ class BotApp:
             return
 
         cursor_start: int | None = None
+        max_batches = 1
         parts = (message.text or "").strip().split()
         if len(parts) > 1:
             raw = parts[1].strip()
             if not raw.isdigit():
-                await message.answer("Использование: /parser_once [cursor_pack_id], пример: /parser_once 6300")
+                await message.answer("Использование: /parser_once [cursor_pack_id] [max_batches], пример: /parser_once 6300 3")
                 return
             cursor_start = int(raw)
+        if len(parts) > 2:
+            raw_batches = parts[2].strip()
+            if not raw_batches.isdigit():
+                await message.answer("Использование: /parser_once [cursor_pack_id] [max_batches], пример: /parser_once 6300 3")
+                return
+            max_batches = max(1, int(raw_batches))
 
         if cursor_start is not None:
-            await message.answer(f"Запускаю разовый батч парсера от курсора {cursor_start}...")
+            await message.answer(f"Запускаю парсер от курсора {cursor_start} (батчей: {max_batches})...")
         else:
-            await message.answer("Запускаю разовый батч парсера (500 pack id)...")
+            await message.answer(f"Запускаю парсер от текущего курсора (батчей: {max_batches})...")
         try:
-            result = await self.game.pool.run_manual_batch(cursor_start=cursor_start)
+            result = await self.game.pool.run_manual_batch(cursor_start=cursor_start, max_batches=max_batches)
             report = self._format_parser_report("Отчет парсера (ручной запуск)", result)
             await message.answer(report)
             await self._send_parser_report("Отчет парсера (ручной запуск)", result)
