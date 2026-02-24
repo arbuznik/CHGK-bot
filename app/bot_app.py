@@ -13,7 +13,7 @@ from aiogram.types.bot_command_scope_all_group_chats import BotCommandScopeAllGr
 from aiogram.types.bot_command_scope_all_private_chats import BotCommandScopeAllPrivateChats
 
 from app.config import Settings
-from app.services import GameService
+from app.services import GameService, UsageStats
 
 logger = logging.getLogger(__name__)
 
@@ -29,6 +29,7 @@ class BotApp:
         self.chat_locks: dict[int, asyncio.Lock] = defaultdict(asyncio.Lock)
         self.scheduled_next: dict[int, asyncio.Task] = {}
         self.replenish_tasks: dict[int, asyncio.Task] = {}
+        self.daily_usage_task: asyncio.Task | None = None
         self._bot_username: str | None = None
 
         self.router.message.register(self.on_command_fallback, F.text.startswith("/"))
@@ -136,6 +137,42 @@ class BotApp:
             )
         except Exception:
             logger.exception("Failed to send parser report to chat_id=%s", report_user_id)
+
+    def _format_usage_report(self, stats: UsageStats) -> str:
+        return (
+            "Отчет использования за 24 часа\n"
+            f"Новых сессий: {stats.started_sessions_24h}\n"
+            f"Уникальных чатов: {stats.active_chats_24h}\n"
+            f"Окно (UTC): {stats.window_from_utc:%Y-%m-%d %H:%M} — {stats.window_to_utc:%Y-%m-%d %H:%M}"
+        )
+
+    async def _usage_report_loop(self) -> None:
+        report_user_id = self.settings.parser_report_user_id
+        if report_user_id is None:
+            return
+        interval = max(60, int(self.settings.daily_usage_report_interval_sec))
+        while True:
+            try:
+                await asyncio.sleep(interval)
+                stats = self.game.usage_stats_last_24h()
+                await self.bot.send_message(chat_id=report_user_id, text=self._format_usage_report(stats))
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                logger.exception("Failed to send daily usage report")
+
+    async def start_background_tasks(self) -> None:
+        if self.daily_usage_task is None or self.daily_usage_task.done():
+            self.daily_usage_task = asyncio.create_task(self._usage_report_loop())
+
+    async def shutdown_background_tasks(self) -> None:
+        if self.daily_usage_task and not self.daily_usage_task.done():
+            self.daily_usage_task.cancel()
+            try:
+                await self.daily_usage_task
+            except asyncio.CancelledError:
+                pass
+        self.daily_usage_task = None
 
     async def _send_question_to_chat(self, chat_id: int, question) -> None:
         text = self._format_question(question)
@@ -416,7 +453,11 @@ class BotApp:
 
     async def run_polling(self) -> None:
         await self.setup_commands_menu()
-        await self.dp.start_polling(self.bot)
+        await self.start_background_tasks()
+        try:
+            await self.dp.start_polling(self.bot)
+        finally:
+            await self.shutdown_background_tasks()
 
     async def setup_commands_menu(self) -> None:
         commands = [

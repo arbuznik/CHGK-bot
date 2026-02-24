@@ -25,6 +25,7 @@ class Settings:
     webhook_base_url: str
     webhook_path: str
     webhook_secret_token: str
+    daily_usage_report_interval_sec: int
 
 
 
@@ -92,4 +93,5 @@ def get_settings() -> Settings:
         webhook_base_url=webhook_base_url,
         webhook_path=os.getenv("WEBHOOK_PATH", "/telegram/webhook").strip(),
         webhook_secret_token=os.getenv("WEBHOOK_SECRET_TOKEN", "").strip(),
+        daily_usage_report_interval_sec=_env_int("DAILY_USAGE_REPORT_INTERVAL_SEC", 86400),
     )

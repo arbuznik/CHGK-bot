@@ -81,6 +81,17 @@ class ChatQuestionUsage(Base):
     used_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)
 
 
+class GameSessionLog(Base):
+    __tablename__ = "game_session_logs"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    chat_id: Mapped[int] = mapped_column(BigInteger, index=True)
+    started_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)
+    selected_difficulty: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    selected_min_likes: Mapped[int] = mapped_column(Integer, default=1)
+    selected_min_take_percent: Mapped[float] = mapped_column(Float, default=20.0)
+
+
 class ParserState(Base):
     __tablename__ = "parser_state"
 

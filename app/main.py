@@ -135,6 +135,7 @@ async def async_main() -> None:
 
     async def on_startup(_: web.Application) -> None:
         await app.setup_commands_menu()
+        await app.start_background_tasks()
         await app.bot.set_webhook(
             url=webhook_url,
             secret_token=settings.webhook_secret_token or None,
@@ -143,6 +144,7 @@ async def async_main() -> None:
         logger.info("Webhook set: %s", webhook_url)
 
     async def on_shutdown(_: web.Application) -> None:
+        await app.shutdown_background_tasks()
         await app.bot.delete_webhook()
 
     aio_app.on_startup.append(on_startup)

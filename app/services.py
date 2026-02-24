@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Optional
 
 from sqlalchemy import and_, case, exists, func, select
@@ -12,7 +12,7 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from app.config import Settings
 from app.matcher import is_correct_answer
-from app.models import ChatQuestionUsage, ChatSession, Question
+from app.models import ChatQuestionUsage, ChatSession, GameSessionLog, Question
 from app.parser import GotQuestionsParser, ReplenishResult
 
 logger = logging.getLogger(__name__)
@@ -24,6 +24,14 @@ class SessionStats:
     taken: int
     complexity_primary_avg: float | None
     complexity_secondary_avg: float | None
+
+
+@dataclass
+class UsageStats:
+    started_sessions_24h: int
+    active_chats_24h: int
+    window_from_utc: datetime
+    window_to_utc: datetime
 
 
 class PoolService:
@@ -262,6 +270,17 @@ class GameService:
 
             session = self.get_or_create_session(db, chat_id)
             if inserted:
+                is_first_question_in_session = session.session_asked_count == 0
+                if is_first_question_in_session:
+                    db.add(
+                        GameSessionLog(
+                            chat_id=chat_id,
+                            started_at=now,
+                            selected_difficulty=session.selected_difficulty,
+                            selected_min_likes=int(session.selected_min_likes or 1),
+                            selected_min_take_percent=float(session.selected_min_take_percent or 20.0),
+                        )
+                    )
                 question = db.get(Question, question_id)
                 session.session_asked_count += 1
                 if question and (question.pack_complexity_primary is not None or question.pack_complexity_secondary is not None):
@@ -419,3 +438,22 @@ class GameService:
             if session.state != "QUESTION_ACTIVE" or not session.current_question_id:
                 return None
             return db.get(Question, session.current_question_id)
+
+    def usage_stats_last_24h(self) -> UsageStats:
+        now = datetime.utcnow()
+        window_from = now - timedelta(hours=24)
+        with self.session_factory() as db:
+            started_sessions = db.execute(
+                select(func.count()).select_from(GameSessionLog).where(GameSessionLog.started_at >= window_from)
+            ).scalar_one()
+            active_chats = db.execute(
+                select(func.count(func.distinct(GameSessionLog.chat_id)))
+                .select_from(GameSessionLog)
+                .where(GameSessionLog.started_at >= window_from)
+            ).scalar_one()
+        return UsageStats(
+            started_sessions_24h=int(started_sessions or 0),
+            active_chats_24h=int(active_chats or 0),
+            window_from_utc=window_from,
+            window_to_utc=now,
+        )
