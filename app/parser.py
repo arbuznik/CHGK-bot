@@ -108,7 +108,7 @@ class GotQuestionsParser:
         take_den: int | None,
         take_percent: float | None,
     ) -> bool:
-        if likes >= 3:
+        if likes >= 1:
             return True
         if (
             take_den is not None
