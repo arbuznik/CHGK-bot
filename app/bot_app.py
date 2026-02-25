@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import html
 import logging
+import traceback
 from collections import defaultdict
 from typing import Awaitable, Callable
 
@@ -11,6 +12,7 @@ from aiogram.types import Message
 from aiogram.types.bot_command import BotCommand
 from aiogram.types.bot_command_scope_all_group_chats import BotCommandScopeAllGroupChats
 from aiogram.types.bot_command_scope_all_private_chats import BotCommandScopeAllPrivateChats
+from sqlalchemy.exc import DBAPIError, OperationalError
 
 from app.config import Settings
 from app.services import GameService, UsageStats
@@ -138,6 +140,64 @@ class BotApp:
         except Exception:
             logger.exception("Failed to send parser report to chat_id=%s", report_user_id)
 
+    async def _send_start_error_report(self, message: Message, exc: Exception, tb: str) -> None:
+        report_user_id = self.settings.parser_report_user_id
+        if report_user_id is None:
+            return
+        try:
+            user_id = message.from_user.id if message.from_user is not None else None
+            text = (
+                "Ошибка в /start\n"
+                f"chat_id: {message.chat.id}\n"
+                f"user_id: {user_id}\n"
+                f"input: {message.text or ''}\n"
+                f"error: {type(exc).__name__}: {exc}\n"
+                "traceback:\n"
+                f"{tb[-2800:]}"
+            )
+            await self.bot.send_message(chat_id=report_user_id, text=text)
+        except Exception:
+            logger.exception("Failed to send /start error report")
+
+    async def _start_game_with_retry(
+        self,
+        chat_id: int,
+        selected_difficulty_value: int | None,
+        min_likes: int,
+        min_take_percent: float,
+        max_attempts: int = 2,
+    ) -> tuple[int, int, str, object | None]:
+        last_exc: Exception | None = None
+        for attempt in range(1, max_attempts + 1):
+            try:
+                filtered_count, total_count = self.game.count_selection(
+                    chat_id=chat_id,
+                    selected_difficulty=selected_difficulty_value,
+                    selected_min_likes=min_likes,
+                    selected_min_take_percent=min_take_percent,
+                )
+                status, q = await self.game.start_game(
+                    chat_id,
+                    selected_difficulty_value,
+                    min_likes,
+                    min_take_percent,
+                )
+                return filtered_count, total_count, status, q
+            except (OperationalError, DBAPIError, TimeoutError) as exc:
+                last_exc = exc
+                logger.warning(
+                    "Transient /start failure attempt %s/%s chat_id=%s: %s",
+                    attempt,
+                    max_attempts,
+                    chat_id,
+                    exc,
+                )
+                if attempt < max_attempts:
+                    await asyncio.sleep(0.8)
+        if last_exc is not None:
+            raise last_exc
+        raise RuntimeError("Unexpected /start retry flow")
+
     def _format_usage_report(self, stats: UsageStats) -> str:
         return (
             "Отчет использования за 24 часа\n"
@@ -232,17 +292,11 @@ class BotApp:
                     return
                 selected_difficulty, min_likes, min_take_percent = parsed
                 selected_difficulty_value = None if selected_difficulty == 0 else selected_difficulty
-                filtered_count, total_count = self.game.count_selection(
+                filtered_count, total_count, status, q = await self._start_game_with_retry(
                     chat_id=message.chat.id,
-                    selected_difficulty=selected_difficulty_value,
-                    selected_min_likes=min_likes,
-                    selected_min_take_percent=min_take_percent,
-                )
-                status, q = await self.game.start_game(
-                    message.chat.id,
-                    selected_difficulty_value,
-                    min_likes,
-                    min_take_percent,
+                    selected_difficulty_value=selected_difficulty_value,
+                    min_likes=min_likes,
+                    min_take_percent=min_take_percent,
                 )
                 if status == "waiting_replenish":
                     await message.answer("Парсинг новых вопросов уже запущен. Подождите немного.")
@@ -273,8 +327,10 @@ class BotApp:
                     return
                 await asyncio.sleep(3)
                 await self._send_question_to_chat(message.chat.id, q)
-            except Exception:
+            except Exception as exc:
+                tb = traceback.format_exc()
                 logger.exception("cmd_start failed for chat_id=%s", message.chat.id)
+                await self._send_start_error_report(message, exc, tb)
                 await message.answer("Ошибка при запуске игры. Попробуй еще раз через несколько секунд.")
 
         await self._with_chat_lock(message.chat.id, _run)
