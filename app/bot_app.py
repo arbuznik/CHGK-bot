@@ -418,6 +418,9 @@ class BotApp:
     async def cmd_stop(self, message: Message) -> None:
         async def _run() -> None:
             self._cancel_scheduled(message.chat.id)
+            current = self.game.get_current_question(message.chat.id)
+            if current is not None:
+                await message.answer(self._format_answer(current), parse_mode="HTML")
             stats = self.game.stop_game(message.chat.id)
             c1 = f"{stats.complexity_primary_avg:.2f}" if stats.complexity_primary_avg is not None else "-"
             c2 = f"{stats.complexity_secondary_avg:.2f}" if stats.complexity_secondary_avg is not None else "-"

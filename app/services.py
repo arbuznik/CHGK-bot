@@ -439,6 +439,13 @@ class GameService:
                 return None
             return db.get(Question, session.current_question_id)
 
+    def get_current_question(self, chat_id: int) -> Question | None:
+        with self.session_factory() as db:
+            session = self.get_or_create_session(db, chat_id)
+            if not session.current_question_id:
+                return None
+            return db.get(Question, session.current_question_id)
+
     def usage_stats_last_24h(self) -> UsageStats:
         now = datetime.utcnow()
         window_from = now - timedelta(hours=24)
