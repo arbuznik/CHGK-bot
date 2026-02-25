@@ -226,8 +226,8 @@ class BotApp:
                 parsed = self._parse_start_params(message.text or "")
                 if parsed is None:
                     await message.answer(
-                        "Использование: /start [сложность 0-10] [мин лайков >=1] [мин % взятий >=0]. "
-                        "0 = рандом. Пример: /start 0 4 31. По умолчанию: /start = рандом, лайки>=1, %взятий>=20."
+                        "Использование: /start [сложность 0-10] [мин лайков >=0] [мин % взятий >=0]. "
+                        "0 = рандом. Пример: /start 0 0 20. По умолчанию: /start = рандом, лайки>=1, %взятий>=20."
                     )
                     return
                 selected_difficulty, min_likes, min_take_percent = parsed
@@ -303,7 +303,7 @@ class BotApp:
             if not raw_likes.isdigit():
                 return None
             min_likes = int(raw_likes)
-            if min_likes < 1:
+            if min_likes < 0:
                 return None
 
         if len(parts) == 4:
@@ -384,7 +384,10 @@ class BotApp:
         if message.text is None:
             return
         text = message.text.strip()
-        cmd = text.split()[0].lower()
+        parts = text.split()
+        if not parts:
+            return
+        cmd = parts[0].lower()
         cmd_name, mention = (cmd.split("@", 1) + [""])[:2]
 
         if mention:
@@ -398,9 +401,15 @@ class BotApp:
             await self.cmd_start(message)
             return
         if cmd_name == "/next":
+            if len(parts) > 1:
+                await message.answer("Использование: /next")
+                return
             await self.cmd_next(message)
             return
         if cmd_name == "/stop":
+            if len(parts) > 1:
+                await message.answer("Использование: /stop")
+                return
             await self.cmd_stop(message)
             return
         if cmd_name == "/parser_once":
