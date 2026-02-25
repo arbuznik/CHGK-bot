@@ -1,0 +1,33 @@
+name: Koyeb Auto Deploy
+
+on:
+  push:
+    branches:
+      - main
+
+jobs:
+  redeploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Trigger Koyeb redeploy
+        env:
+          KOYEB_API: ${{ secrets.KOYEB_API }}
+          KOYEB_SERVICE_ID: 3ea269e1-8349-40d2-a9a6-90590cecb4cd
+        run: |
+          set -euo pipefail
+          if [ -z "${KOYEB_API:-}" ]; then
+            echo "KOYEB_API secret is not set" >&2
+            exit 1
+          fi
+
+          DEPLOY_ID=$(curl -fsS -X POST \
+            -H "Authorization: Bearer ${KOYEB_API}" \
+            "https://app.koyeb.com/v1/services/${KOYEB_SERVICE_ID}/redeploy" \
+            | jq -r '.deployment.id // .id // empty')
+
+          if [ -z "${DEPLOY_ID}" ]; then
+            echo "Failed to trigger deployment" >&2
+            exit 1
+          fi
+
+          echo "Triggered deployment: ${DEPLOY_ID}"
